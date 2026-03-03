@@ -62,6 +62,8 @@ RHINO_COMMAND_ROSTER = [
     # Curves
     ("trim_curve", "Trim curve to a parameter interval [t0, t1] to keep; optional delete input."),
     ("join_curves", "Join multiple curves into one or more curves; optional delete input and tolerance."),
+    ("curve_domain", "Get the parameter domain [t0, t1] of a curve."),
+    ("trim_curve_by_fraction", "Trim curve using fractional parameters [0..1] mapped over its domain."),
     # Jewelry helpers
     ("ring_blank", "Create ring blank solid (inner diameter, band width/thickness)."),
     ("head_blank", "Create head blank solid (shape, length/width/height, optional corner radius)."),

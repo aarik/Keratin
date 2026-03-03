@@ -373,21 +373,28 @@ class RhinoTools:
         except Exception as e:
             return "Error pipe: {0}".format(str(e))
 
-    def curve_domain(self, curve_id: str, ctx: Optional[Context] = None) -> str:
-    """Return the curve parameter domain [t0, t1] for a Rhino curve."""
-    try:
-        return self.send_command("curve_domain", {"curve_id": curve_id})
-    except Exception as e:
-        return "Error getting curve domain: {0}".format(str(e))
+    def curve_domain(self, ctx: Context, curve_id: str) -> str:
+        """Return the curve parameter domain [t0, t1] for a Rhino curve."""
+        try:
+            result = get_rhino_connection().send_command("curve_domain", {"curve_id": curve_id})
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return "Error getting curve domain: {0}".format(str(e))
 
-def trim_curve_by_fraction(self, curve_id: str, f0: float, f1: float, delete_input: bool = False, ctx: Optional[Context] = None) -> str:
-    """Trim a curve using fractional parameters (0..1) mapped over its domain."""
-    try:
-        return self.send_command("trim_curve_by_fraction", {"curve_id": curve_id, "f0": f0, "f1": f1, "delete_input": delete_input})
-    except Exception as e:
-        return "Error trimming curve by fraction: {0}".format(str(e))
+    def trim_curve_by_fraction(self, ctx: Context, curve_id: str, start_fraction: float, end_fraction: float, delete_input: bool = True) -> str:
+        """Trim a curve using fractional parameters (0..1) mapped over its domain."""
+        try:
+            result = get_rhino_connection().send_command("trim_curve_by_fraction", {
+                "curve_id": curve_id, 
+                "start_fraction": float(start_fraction), 
+                "end_fraction": float(end_fraction), 
+                "delete_input": bool(delete_input)
+            })
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return "Error trimming curve by fraction: {0}".format(str(e))
 
-def trim_curve(self, ctx: Context, curve_id: str, interval_min: float, interval_max: float, delete_input: bool = True) -> str:
+    def trim_curve(self, ctx: Context, curve_id: str, interval_min: float, interval_max: float, delete_input: bool = True) -> str:
         """Trim a curve to the parameter interval [interval_min, interval_max] (the portion to keep).
         Use curve_domain or CurveDomain in code to get the curve's parameter range."""
         try:
@@ -401,53 +408,32 @@ def trim_curve(self, ctx: Context, curve_id: str, interval_min: float, interval_
         except Exception as e:
             return "Error trim curve: {0}".format(str(e))
 
-    def join_curves(self, ctx: Context, curve_ids: List[str], delete_input: bool = False, tolerance: Optional[float] = None) -> str:
-        """Join two or more curves into one or more curves. Returns the new curve IDs."""
+    def validate_command_roster(self, ctx: Optional[Context] = None) -> str:
+        """Validate that the command roster matches the currently exposed MCP tool methods.
+        Returns missing/extra command names relative to MCP_TO_RS_MAP keys."""
         try:
-            params = {"curve_ids": curve_ids, "delete_input": bool(delete_input)}
-            if tolerance is not None:
-                params["tolerance"] = float(tolerance)
-            result = get_rhino_connection().send_command("join_curves", params)
-            return json.dumps(result, indent=2)
+            from rhino_mcp.resources.rhino_command_roster import MCP_TO_RS_MAP
+            roster_cmds = set(MCP_TO_RS_MAP.keys())
+
+            # Exposed methods on this class that forward to Rhino (heuristic)
+            method_names = [n for n in dir(self) if callable(getattr(self, n)) and not n.startswith("_")]
+            # Filter to likely command methods (exclude obvious non-tools)
+            blacklist = set(["send_command", "connect", "disconnect", "is_connected", "ensure_connected"])
+            tool_methods = set([n for n in method_names if n not in blacklist])
+
+            missing = sorted(list(roster_cmds - tool_methods))
+            extra = sorted(list(tool_methods - roster_cmds))
+
+            return json.dumps({
+                "status": "ok",
+                "roster_count": len(roster_cmds),
+                "tool_method_count": len(tool_methods),
+                "missing_in_tools": missing,
+                "extra_in_tools": extra,
+                "note": "This is a heuristic check. Tools that don't map 1:1 to commands may appear as 'extra'."
+            }, indent=2)
         except Exception as e:
-            return "Error join curves: {0}".format(str(e))
-
-    def list_rhino_commands(self, ctx: Optional[Context] = None) -> str:
-        """Return the full roster of Rhino MCP commands available on this server.
-        Call this at the start of a session to see every command type and its short description.
-        Entries may include rs_function when the command maps to a Rhino 7 RhinoScriptSyntax function."""
-        try:
-            roster = get_full_roster()
-            return json.dumps({"commands": roster, "count": len(roster)}, indent=2)
-        except Exception as e:
-            return "Error listing commands: {0}".format(str(e))
-
-def validate_command_roster(self, ctx: Optional[Context] = None) -> str:
-    """Validate that the command roster matches the currently exposed MCP tool methods.
-    Returns missing/extra command names relative to MCP_TO_RS_MAP keys."""
-    try:
-        from rhino_mcp.resources.rhino_command_roster import MCP_TO_RS_MAP
-        roster_cmds = set(MCP_TO_RS_MAP.keys())
-
-        # Exposed methods on this class that forward to Rhino (heuristic)
-        method_names = [n for n in dir(self) if callable(getattr(self, n)) and not n.startswith("_")]
-        # Filter to likely command methods (exclude obvious non-tools)
-        blacklist = set(["send_command", "connect", "disconnect", "is_connected", "ensure_connected"])
-        tool_methods = set([n for n in method_names if n not in blacklist])
-
-        missing = sorted(list(roster_cmds - tool_methods))
-        extra = sorted(list(tool_methods - roster_cmds))
-
-        return json.dumps({
-            "status": "ok",
-            "roster_count": len(roster_cmds),
-            "tool_method_count": len(tool_methods),
-            "missing_in_tools": missing,
-            "extra_in_tools": extra,
-            "note": "This is a heuristic check. Tools that don't map 1:1 to commands may appear as 'extra'."
-        }, indent=2)
-    except Exception as e:
-        return "Error validating command roster: {0}".format(str(e))
+            return "Error validating command roster: {0}".format(str(e))
 
 
     def list_rhinoscript_functions(self, ctx: Optional[Context] = None, category: Optional[str] = None, include_functions: bool = False, offset: int = 0, limit: int = 200) -> str:

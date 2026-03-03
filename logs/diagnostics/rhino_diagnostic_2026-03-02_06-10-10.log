@@ -1,0 +1,16 @@
+[2026-03-02 06:10:10,302] [INFO] [diagnostic] TCP connect test: SUCCESS
+[2026-03-02 06:10:10,303] [INFO] [diagnostic] Connecting to 127.0.0.1:9876 ...
+[2026-03-02 06:10:10,303] [INFO] [diagnostic] Connected
+[2026-03-02 06:10:10,303] [INFO] [diagnostic] Sending: {'id': 'diag_1772449810303', 'type': 'get_rhino_scene_info', 'params': {}}
+[2026-03-02 06:10:20,304] [ERROR] [diagnostic] Unhandled error: timed out
+[2026-03-02 06:10:20,305] [ERROR] [diagnostic] Traceback (most recent call last):
+  File "C:\Users\Aarik\Documents\GitHub\Rhinoceros3d-mcp\tools\ops\diagnose_rhino_connection.py", line 187, in <module>
+    raise SystemExit(main())
+  File "C:\Users\Aarik\Documents\GitHub\Rhinoceros3d-mcp\tools\ops\diagnose_rhino_connection.py", line 155, in main
+    scene = send_command(args.host, args.port, "get_rhino_scene_info", {}, timeout_s=args.timeout)
+  File "C:\Users\Aarik\Documents\GitHub\Rhinoceros3d-mcp\tools\ops\diagnose_rhino_connection.py", line 99, in send_command
+    raw = _recv_line(s, timeout_s=timeout_s)
+  File "C:\Users\Aarik\Documents\GitHub\Rhinoceros3d-mcp\tools\ops\diagnose_rhino_connection.py", line 69, in _recv_line
+    chunk = sock.recv(RECV_CHUNK)
+TimeoutError: timed out
+
