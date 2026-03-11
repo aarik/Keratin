@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-RhinoMCP - Main entry point
+keratin - Main entry point
 
-This script serves as a convenience wrapper to start the RhinoMCP server.
+Convenience wrapper to start the keratin MCP server.
+Prefer the CLI entry point: `keratin` (after pip install keratin).
 """
 
 from rhino_mcp.server import main

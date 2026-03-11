@@ -408,6 +408,18 @@ class RhinoTools:
         except Exception as e:
             return "Error trim curve: {0}".format(str(e))
 
+    def join_curves(self, ctx: Context, curve_ids: List[str], delete_input: bool = False, tolerance: Optional[float] = None) -> str:
+        """Join two or more curves into one or more polycurves wherever endpoints are within tolerance.
+        Returns the list of resulting curve IDs."""
+        try:
+            params = {"curve_ids": curve_ids, "delete_input": bool(delete_input)}
+            if tolerance is not None:
+                params["tolerance"] = float(tolerance)
+            result = get_rhino_connection().send_command("join_curves", params)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return "Error joining curves: {0}".format(str(e))
+
     def validate_command_roster(self, ctx: Optional[Context] = None) -> str:
         """Validate that the command roster matches the currently exposed MCP tool methods.
         Returns missing/extra command names relative to MCP_TO_RS_MAP keys."""
@@ -435,44 +447,56 @@ class RhinoTools:
         except Exception as e:
             return "Error validating command roster: {0}".format(str(e))
 
+    def list_rhino_commands(self, ctx: Optional[Context] = None) -> str:
+        """Return every MCP tool name this server exposes, with its description and parameter list.
+        Use this to discover what operations are available before choosing a tool."""
+        try:
+            from rhino_mcp.resources.rhino_command_roster import RHINO_COMMAND_ROSTER
+            return json.dumps({
+                "status": "ok",
+                "count": len(RHINO_COMMAND_ROSTER),
+                "commands": RHINO_COMMAND_ROSTER,
+            }, indent=2)
+        except Exception as e:
+            return "Error listing rhino commands: {0}".format(str(e))
 
     def list_rhinoscript_functions(self, ctx: Optional[Context] = None, category: Optional[str] = None, include_functions: bool = False, offset: int = 0, limit: int = 200) -> str:
         """Return the full Rhino 7 RhinoScriptSyntax (rs.*) API: every function name and its category.
         This matches the full set of tools available in Rhino 7. Use look_up_RhinoScriptSyntax(name) for
         docs and execute_rhino_code() to call rs.<name>(...). Optionally filter by category (e.g. curve,
         surface, mesh, object, layer, curve, document, view)."""
-try:
-    categories = get_categories()
-    # Default behavior: return categories only (small payload) unless include_functions
-    # or a category filter is provided.
-    if not include_functions and not category:
-        return json.dumps({
-            "categories": categories,
-            "count_categories": len(categories),
-            "usage": "Pass category='<name>' or include_functions=true (optionally with offset/limit) to list functions."
-        }, indent=2)
+        try:
+            categories = get_categories()
+            # Default behavior: return categories only (small payload) unless include_functions
+            # or a category filter is provided.
+            if not include_functions and not category:
+                return json.dumps({
+                    "categories": categories,
+                    "count_categories": len(categories),
+                    "usage": "Pass category='<name>' or include_functions=true (optionally with offset/limit) to list functions."
+                }, indent=2)
 
-    funcs = get_all_functions(category=category)
-    total = len(funcs)
+            funcs = get_all_functions(category=category)
+            total = len(funcs)
 
-    # paging for smaller models
-    if offset < 0:
-        offset = 0
-    if limit is None or limit <= 0:
-        limit = 200
-    page = funcs[offset: offset + limit]
+            # paging for smaller models
+            if offset < 0:
+                offset = 0
+            if limit is None or limit <= 0:
+                limit = 200
+            page = funcs[offset: offset + limit]
 
-    return json.dumps({
-        "category": category,
-        "offset": offset,
-        "limit": limit,
-        "returned": len(page),
-        "count": total,
-        "categories": categories,
-        "functions": page,
-        "usage": "Use look_up_RhinoScriptSyntax(function_name) for docs; execute_rhino_code() to call rs.<name>(...)."
-    }, indent=2)
-except Exception as e:
+            return json.dumps({
+                "category": category,
+                "offset": offset,
+                "limit": limit,
+                "returned": len(page),
+                "count": total,
+                "categories": categories,
+                "functions": page,
+                "usage": "Use look_up_RhinoScriptSyntax(function_name) for docs; execute_rhino_code() to call rs.<name>(...)."
+            }, indent=2)
+        except Exception as e:
             return "Error listing RhinoScript functions: {0}".format(str(e))
 
     # ------------------------------

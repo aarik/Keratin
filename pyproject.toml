@@ -1,11 +1,11 @@
 [project]
-name = "reer-rhino-mcp"
-version = "0.1.10" 
-description = "Rhino MCP Server"
+name = "keratin"
+version = "0.1.0"
+description = "AI-powered Rhino3D MCP bridge — connect Claude to Rhinoceros 3D"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    {name = "REER Rhino MCP Team"}
+    {name = "Aarik W"}
 ]
 license = {text = "MIT"}
 classifiers = [
@@ -13,6 +13,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+keywords = ["rhino", "mcp", "ai", "claude", "cad", "rhinoscript", "grasshopper"]
 dependencies = [
     "mcp[cli]>=1.3.0",
     "fastapi>=0.95.0",
@@ -22,18 +23,20 @@ dependencies = [
     "python-dotenv>=0.21.0",
     "starlette>=0.27.0",
     "httpx>=0.24.0",
-    "anyio>=3.0.0,<4.0.0",
+    "anyio>=4.5.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/aarik/keratin"
+Repository = "https://github.com/aarik/keratin"
+
 [project.scripts]
-rhino-mcp = "rhino_mcp.server:main"
-rhino-web = "rhino_mcp.web_server:main"
-reer-rhino-web = "rhino_mcp.web_server:main"
-reer-rhino-mcp = "rhino_mcp.server:main"
+keratin = "rhino_mcp.server:main"
+keratin-web = "rhino_mcp.web_server:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-package-dir = {"" = "."} 
+package-dir = {"" = "."}
