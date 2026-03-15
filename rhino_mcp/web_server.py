@@ -14,10 +14,10 @@ logger = logging.getLogger("WebServer")
 # create FastAPI app
 app = FastAPI()
 
-# allow cross-domain requests
+# allow cross-domain requests (restricted to localhost to prevent remote code execution)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost", "http://127.0.0.1", "http://localhost:3000", "http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,7 +73,7 @@ async def execute_command(command: Dict[str, Any]):
         result = rhino_tools.execute_command(command)
         return {"status": "success", "data": result}
     except Exception as e:
-        logger.error(f"Command execution error: {str(e)}")
+        logger.error("Command execution error: {0}".format(str(e)))
         return {"status": "error", "message": str(e)}
 
 @app.get("/rhino/scene")
@@ -93,28 +93,31 @@ async def get_strategy():
     }
 
 # WebSocket endpoint
+# NOTE: Each WebSocket connection creates its own RhinoConnection to the Rhino listener.
+# The Rhino listener (rhino_script.py) accepts multiple clients, but only one client
+# should be active at a time to avoid response desynchronization.
 @app.websocket("/rhino/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     rhino_conn = RhinoConnection(port=9876)
-    
+
     try:
         # connect to Rhino
         rhino_conn.connect()
         logger.info("Connected to Rhino socket server")
-        
+
         # send initial connection success message
         await websocket.send_json({
             "status": "connected",
             "message": "Connected to Rhino socket server"
         })
-        
+
         # main message loop
         while True:
             try:
                 # wait for message
                 data = await websocket.receive_json()
-                logger.info(f"Received command: {data}")
+                logger.info("Received command: {0}".format(data))
 
                 cmd_type = data.get("type") if isinstance(data, dict) else None
                 if not cmd_type:
@@ -126,31 +129,31 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # send command to Rhino
                 result = rhino_conn.send_command(cmd_type, data.get("params", {}))
-                
+
                 # send result
                 await websocket.send_json({
                     "status": "success",
                     "data": result
                 })
-                
+
             except json.JSONDecodeError:
                 await websocket.send_json({
                     "status": "error",
                     "message": "Invalid JSON format"
                 })
             except Exception as e:
-                logger.error(f"Command execution error: {str(e)}")
+                logger.error("Command execution error: {0}".format(str(e)))
                 await websocket.send_json({
                     "status": "error",
                     "message": str(e)
                 })
-                
+
     except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}")
+        logger.error("WebSocket error: {0}".format(str(e)))
         try:
             await websocket.send_json({
                 "status": "error",
-                "message": f"Connection error: {str(e)}"
+                "message": "Connection error: {0}".format(str(e))
             })
         except Exception:
             pass

@@ -7,6 +7,7 @@ from typing import AsyncIterator, Dict, Any, List, Optional
 import json
 import socket
 import time
+import threading
 import base64
 import io
 from PIL import Image as PILImage
@@ -25,90 +26,111 @@ class RhinoConnection:
         self.port = port
         self.socket = None
         self.timeout = 120.0  # 2 minute timeout for complex operations
-        self.buffer_size = 14485760  # 10MB buffer size for handling large images
-    
+        self._recv_size = 65536  # recv chunk size per call
+        self._lock = threading.Lock()  # Serialize connect/disconnect/send_command
+
     def connect(self):
         """Connect to the Rhino script's socket server"""
-        if self.socket is None:
-            try:
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.socket.settimeout(self.timeout)
-                self.socket.connect((self.host, self.port))
-                logger.info("Connected to Rhino script")
-            except Exception as e:
-                logger.error("Failed to connect to Rhino script: {0}".format(str(e)))
-                self.disconnect()
-                raise
-    
-    def disconnect(self):
-        """Disconnect from the Rhino script"""
+        with self._lock:
+            if self.socket is None:
+                try:
+                    self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.socket.settimeout(self.timeout)
+                    self.socket.connect((self.host, self.port))
+                    logger.info("Connected to Rhino script")
+                except Exception as e:
+                    logger.error("Failed to connect to Rhino script: {0}".format(str(e)))
+                    self._disconnect_unlocked()
+                    raise
+
+    def _disconnect_unlocked(self):
+        """Disconnect without acquiring the lock (caller must hold it)."""
         if self.socket:
             try:
                 self.socket.close()
             except Exception:
                 pass
             self.socket = None
-    
+
+    def disconnect(self):
+        """Disconnect from the Rhino script"""
+        with self._lock:
+            self._disconnect_unlocked()
+
     def send_command(self, command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Send a command to the Rhino script and wait for response"""
-        if self.socket is None:
-            self.connect()
-        
-        try:
-            # Prepare command
-            command = {
-                "type": command_type,
-                "params": params or {}
-            }
-            
-            # Send command (newline-delimited JSON framing)
-            command_json = json.dumps(command) + "\n"
-            logger.info("Sending command: {0}".format(command_json))
-            self.socket.sendall(command_json.encode('utf-8'))
-            
-            # Receive response with timeout and larger buffer
-            buffer = b''
-            start_time = time.time()
-            
-            while True:
+        """Send a command to the Rhino script and wait for response.
+        Thread-safe: only one command can be in-flight at a time."""
+        with self._lock:
+            if self.socket is None:
+                # Connect inside the lock so two callers don't race
                 try:
-                    # Check timeout
-                    if time.time() - start_time > self.timeout:
-                        raise Exception("Response timeout after {0} seconds".format(self.timeout))
-                    
-                    # Receive data
-                    data = self.socket.recv(self.buffer_size)
-                    if not data:
-                        break
-                        
-                    buffer += data
-                    logger.debug("Received {0} bytes of data".format(len(data)))
+                    self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.socket.settimeout(self.timeout)
+                    self.socket.connect((self.host, self.port))
+                    logger.info("Connected to Rhino script (auto-reconnect)")
+                except Exception as e:
+                    logger.error("Failed to connect to Rhino script: {0}".format(str(e)))
+                    self._disconnect_unlocked()
+                    raise
 
-                    # Parse one line (one JSON object) at a time
-                    if b"\n" not in buffer:
-                        continue
-                    line, _, rest = buffer.partition(b"\n")
-                    buffer = rest
-                    if not line.strip():
-                        continue
-                    response = json.loads(line.decode('utf-8'))
-                    logger.info("Received complete response: {0}".format(response))
+            try:
+                # Prepare command
+                command = {
+                    "type": command_type,
+                    "params": params or {}
+                }
 
-                    # Check for error response
-                    if response.get("status") == "error":
-                        raise Exception(response.get("message", "Unknown error from Rhino"))
+                # Send command (newline-delimited JSON framing)
+                command_json = json.dumps(command) + "\n"
+                logger.info("Sending command: {0}".format(command_json))
+                self.socket.sendall(command_json.encode('utf-8'))
 
-                    return response
-                            
-                except socket.timeout:
-                    raise Exception("Socket timeout while receiving response")
-                    
-            raise Exception("Connection closed by Rhino script")
-            
-        except Exception as e:
-            logger.error("Error communicating with Rhino script: {0}".format(str(e)))
-            self.disconnect()  # Disconnect on error to force reconnection
-            raise
+                # Receive response with timeout
+                buffer = b''
+                start_time = time.time()
+                max_buffer = 15 * 1024 * 1024  # 15 MB safety cap
+
+                while True:
+                    try:
+                        # Check timeout
+                        if time.time() - start_time > self.timeout:
+                            raise Exception("Response timeout after {0} seconds".format(self.timeout))
+
+                        # Receive data in reasonable chunks
+                        data = self.socket.recv(self._recv_size)
+                        if not data:
+                            break
+
+                        buffer += data
+                        if len(buffer) > max_buffer:
+                            raise Exception("Response exceeded {0} byte safety limit".format(max_buffer))
+                        logger.debug("Received {0} bytes of data".format(len(data)))
+
+                        # Parse one line (one JSON object) at a time
+                        if b"\n" not in buffer:
+                            continue
+                        line, _, rest = buffer.partition(b"\n")
+                        buffer = rest
+                        if not line.strip():
+                            continue
+                        response = json.loads(line.decode('utf-8'))
+                        logger.info("Received complete response: {0}".format(response))
+
+                        # Check for error response
+                        if response.get("status") == "error":
+                            raise Exception(response.get("message", "Unknown error from Rhino"))
+
+                        return response
+
+                    except socket.timeout:
+                        raise Exception("Socket timeout while receiving response")
+
+                raise Exception("Connection closed by Rhino script")
+
+            except Exception as e:
+                logger.error("Error communicating with Rhino script: {0}".format(str(e)))
+                self._disconnect_unlocked()  # Disconnect on error to force reconnection
+                raise
 
 # Global connection instance
 _rhino_connection = None
@@ -822,8 +844,9 @@ from datetime import datetime
 def add_rhino_object_metadata(obj_id, name=None, description=None):
     # Add standardized metadata to an object
     try:
-        # Generate short ID
-        short_id = datetime.now().strftime("%d%H%M%S")
+        # Generate short ID with milliseconds to avoid collisions
+        _now = datetime.now()
+        short_id = _now.strftime("%d%H%M%S") + "{0:03d}".format(_now.microsecond // 1000)
         
         # Get bounding box
         bbox = rs.BoundingBox(obj_id)
@@ -933,66 +956,65 @@ def add_rhino_object_metadata(obj_id, name=None, description=None):
             # Get the category for the function
             category = get_function_category(function_name)
             if not category:
-                return f"Function '{function_name}' not found in RhinoScriptSyntax categories"
-            
-            # Construct the URL to the GitHub repository source code 
-            # the raw.githubusercontent.com/... gives raw source code
-            github_url = f"https://raw.githubusercontent.com/mcneel/rhinoscriptsyntax/rhino-8.x/Scripts/rhinoscript/{category}.py"
-            logger.info(f"Looking up documentation at URL: {github_url}")
-            
+                return "Function '{0}' not found in RhinoScriptSyntax categories".format(function_name)
+
+            # Construct the URL to the GitHub repository source code (Rhino 7 branch)
+            github_url = "https://raw.githubusercontent.com/mcneel/rhinoscriptsyntax/rhino-7.x/Scripts/rhinoscript/{0}.py".format(category)
+            logger.info("Looking up documentation at URL: {0}".format(github_url))
+
             # Fetch the Python source file
             response = requests.get(github_url)
             if response.status_code != 200:
-                return f"Failed to fetch source code for category '{category}' (HTTP status: {response.status_code})"
-            
+                return "Failed to fetch source code for category '{0}' (HTTP status: {1})".format(category, response.status_code)
+
             # Parse the Python file to find the function definition and docstring
             source_code = response.text
-            
+
             # Look for the function definition
-            function_pattern = re.compile(f"def {function_name}\\s*\\(.*?\\):", re.DOTALL)
+            function_pattern = re.compile("def {0}\\s*\\(.*?\\):".format(function_name), re.DOTALL)
             function_match = function_pattern.search(source_code)
             if not function_match:
-                return f"Function '{function_name}' not found in the source code for category '{category}'"
-            
+                return "Function '{0}' not found in the source code for category '{1}'".format(function_name, category)
+
             # Find the start of the function
             function_start = function_match.start()
-            
+
             # Extract the docstring
             docstring_start = source_code.find('"""', function_start)
             if docstring_start == -1:
-                return f"No documentation found for function '{function_name}'"
-            
+                return "No documentation found for function '{0}'".format(function_name)
+
             docstring_end = source_code.find('"""', docstring_start + 3)
             if docstring_end == -1:
-                return f"Malformed documentation for function '{function_name}'"
-            
+                return "Malformed documentation for function '{0}'".format(function_name)
+
             docstring = source_code[docstring_start + 3:docstring_end].strip()
-            
+
             # Format the docstring into Markdown
             documentation = []
-            
+
             # Add the function name as a header
-            documentation.append(f"# {function_name}")
+            documentation.append("# {0}".format(function_name))
             documentation.append("")
-            
+
             # Add the function signature
             function_def = function_match.group(0).strip()[4:-1]  # Remove 'def ' prefix and ':' suffix
             documentation.append("```python")
             documentation.append(function_def)
             documentation.append("```")
             documentation.append("")
-            
+
             # Process the docstring into sections
             lines = docstring.split("\n")
             current_section = "Description"
             sections = {"Description": []}
-            
+
             for line in lines:
                 line = line.strip()
                 # Remove leading spaces that might be part of the docstring formatting
                 if line.startswith(" "):
                     line = line.lstrip()
-                
+
                 # Check if this is a section header
                 if line.endswith(":") and not line.startswith(" "):
                     current_section = line[:-1]  # Remove the colon
@@ -1000,7 +1022,7 @@ def add_rhino_object_metadata(obj_id, name=None, description=None):
                         sections[current_section] = []
                 else:
                     sections[current_section].append(line)
-            
+
             # Format each section
             for section, content in sections.items():
                 if section == "Description" and content:
@@ -1009,52 +1031,52 @@ def add_rhino_object_metadata(obj_id, name=None, description=None):
                             documentation.append(line)
                     documentation.append("")
                 elif section == "Parameters" and content:
-                    documentation.append(f"## {section}")
+                    documentation.append("## {0}".format(section))
                     for line in content:
                         if line:
-                            documentation.append(f"- {line}")
+                            documentation.append("- {0}".format(line))
                     documentation.append("")
                 elif section == "Returns" and content:
-                    documentation.append(f"## {section}")
+                    documentation.append("## {0}".format(section))
                     for line in content:
                         if line:
-                            documentation.append(f"- {line}")
+                            documentation.append("- {0}".format(line))
                     documentation.append("")
                 elif section == "Example" and content:
-                    documentation.append(f"## {section}")
+                    documentation.append("## {0}".format(section))
                     # Find the start of code blocks
                     in_code_block = False
                     for line in content:
                         if not in_code_block and (line.strip().startswith("import") or line.strip().startswith("rs.")):
                             documentation.append("```python")
                             in_code_block = True
-                        
+
                         if in_code_block and not line.strip() and "```" not in documentation[-1]:
                             documentation.append("```")
                             in_code_block = False
-                        
+
                         documentation.append(line)
-                    
+
                     if in_code_block:
                         documentation.append("```")
                     documentation.append("")
                 elif section == "See Also" and content:
-                    documentation.append(f"## {section}")
+                    documentation.append("## {0}".format(section))
                     items = []
                     for line in content:
                         if line.strip():
                             items.append(line.strip())
-                    
+
                     for item in items:
-                        documentation.append(f"- {item}")
+                        documentation.append("- {0}".format(item))
                     documentation.append("")
-            
+
             # Add a link to the GitHub repository
-            github_view_url = f"https://github.com/mcneel/rhinoscriptsyntax/blob/rhino-8.x/Scripts/rhinoscript/{category}.py"
-            documentation.append(f"[View source code on GitHub]({github_view_url})")
-            
+            github_view_url = "https://github.com/mcneel/rhinoscriptsyntax/blob/rhino-7.x/Scripts/rhinoscript/{0}.py".format(category)
+            documentation.append("[View source code on GitHub]({0})".format(github_view_url))
+
             return "\n".join(documentation)
-            
+
         except Exception as e:
-            logger.error(f"Error looking up RhinoScriptSyntax documentation: {str(e)}")
-            return f"Error fetching documentation: {str(e)}"
+            logger.error("Error looking up RhinoScriptSyntax documentation: {0}".format(str(e)))
+            return "Error fetching documentation: {0}".format(str(e))

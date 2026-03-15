@@ -21,7 +21,7 @@ try:
     env_path = Path(__file__).parent.parent / '.env'
     if env_path.exists():
         load_dotenv(dotenv_path=env_path)
-        logging.info(f"Loaded environment variables from {env_path}")
+        logging.info("Loaded environment variables from {0}".format(env_path))
 except ImportError:
     logging.warning("python-dotenv not installed. Install it to use .env files: pip install python-dotenv")
 
@@ -145,7 +145,7 @@ def main():
 
     # Create and run the Starlette app
     starlette_app = create_starlette_app(mcp_server, debug=True)
-    logger.info(f"Starting RhinoMCP server on {HOST}:{PORT}")
+    logger.info("Starting RhinoMCP server on {0}:{1}".format(HOST, PORT))
     uvicorn.run(starlette_app, host=HOST, port=PORT)
 
 if __name__ == "__main__":

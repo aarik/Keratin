@@ -78,15 +78,27 @@ def log_message(message):
     """Log a message to both Rhino's command line and log file"""
     # Print to Rhino's command line
     Rhino.RhinoApp.WriteLine(message)
-    
+
     # Log to file
     try:
         log_dir = get_log_dir()
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
-            
+
         log_file = os.path.join(log_dir, "rhino_mcp.log")
-        
+
+        # Size-based log rotation: if log exceeds 5MB, rotate
+        max_log_size = 5 * 1024 * 1024  # 5MB
+        if os.path.exists(log_file):
+            try:
+                if os.path.getsize(log_file) > max_log_size:
+                    rotated = log_file + ".1"
+                    if os.path.exists(rotated):
+                        os.remove(rotated)
+                    os.rename(log_file, rotated)
+            except Exception:
+                pass
+
         # Log platform info on first run
         if not os.path.exists(log_file):
             with open(log_file, "w") as f:
@@ -95,7 +107,7 @@ def log_message(message):
                 f.write("Python Version: {0}\n".format(sys.version))
                 f.write("Rhino Version: {0}\n".format(Rhino.RhinoApp.Version))
                 f.write("==================\n\n")
-        
+
         with open(log_file, "a") as f:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             f.write("[{0}] {1}\n".format(timestamp, message))
@@ -121,6 +133,19 @@ class RhinoMCPServer:
             self._loft_sections = _loft_sections.__get__(self, RhinoMCPServer)
         except Exception as _bind_err:
             log_message("WARNING: failed binding jewelry helpers: {0}".format(str(_bind_err)))
+        # Bind remaining module-level functions
+        try:
+            self._add_rhino_object_metadata = _add_rhino_object_metadata.__get__(self, RhinoMCPServer)
+            self._get_rhino_objects_with_metadata = _get_rhino_objects_with_metadata.__get__(self, RhinoMCPServer)
+            self._capture_rhino_viewport = _capture_rhino_viewport.__get__(self, RhinoMCPServer)
+            self._get_rhino_selected_objects = _get_rhino_selected_objects.__get__(self, RhinoMCPServer)
+            self._grasshopper_add_components = _grasshopper_add_components.__get__(self, RhinoMCPServer)
+            self._grasshopper_get_definition_info = _grasshopper_get_definition_info.__get__(self, RhinoMCPServer)
+            self._grasshopper_run_solver = _grasshopper_run_solver.__get__(self, RhinoMCPServer)
+            self._grasshopper_clear_canvas = _grasshopper_clear_canvas.__get__(self, RhinoMCPServer)
+            self._grasshopper_list_available_components = _grasshopper_list_available_components.__get__(self, RhinoMCPServer)
+        except Exception as _bind_err:
+            log_message("WARNING: failed binding module-level helpers: {0}".format(str(_bind_err)))
     
     def start(self):
         if self.running:
@@ -134,7 +159,7 @@ class RhinoMCPServer:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.socket.bind((self.host, self.port))
-            self.socket.listen(1)
+            self.socket.listen(5)
             
             # Start server thread
             self.server_thread = threading.Thread(target=self._server_loop)
@@ -227,20 +252,6 @@ class RhinoMCPServer:
                     # Execute on Rhino UI thread (Idle), but send response from a worker thread
                     def idle_handler(sender, e):
                         Rhino.RhinoApp.Idle -= idle_handler
-
-                        def do_work():
-                            try:
-                                response = self.execute_command(command)
-                            except Exception as ex:
-                                log_message("Error executing command: {0}".format(str(ex)))
-                                traceback.print_exc()
-                                response = {"status": "error", "message": str(ex)}
-
-                            if not _send_json(response):
-                                try:
-                                    client.close()
-                                except:
-                                    pass
 
                         # Execute the Rhino-side work on UI thread, but network send off-thread
                         try:
@@ -902,8 +913,13 @@ class RhinoMCPServer:
     def _boolean_intersection(self, params):
         try:
             ids = (params or {}).get("object_ids") or []
-            gids = [System.Guid(i) for i in ids]
-            res = rs.BooleanIntersection(gids)
+            if len(ids) < 2:
+                return {"status": "error", "message": "At least 2 object IDs are required for boolean intersection"}
+            # rs.BooleanIntersection takes exactly two arguments:
+            # first set (list) and second set (list)
+            first_set = [System.Guid(ids[0])]
+            second_set = [System.Guid(i) for i in ids[1:]]
+            res = rs.BooleanIntersection(first_set, second_set)
             sc.doc.Views.Redraw()
             return {"status": "success", "result_ids": [str(i) for i in (res or [])]}
         except Exception as e:
@@ -963,8 +979,12 @@ class RhinoMCPServer:
                 return {"status": "error", "message": "curve_id is required"}
             if plane == "WorldXY":
                 pl = Rhino.Geometry.Plane.WorldXY
+            elif plane == "WorldYZ":
+                pl = Rhino.Geometry.Plane.WorldYZ
+            elif plane == "WorldZX":
+                pl = Rhino.Geometry.Plane.WorldZX
             else:
-                pl = Rhino.Geometry.Plane.WorldXY
+                return {"status": "error", "message": "Unsupported plane: {0}. Use WorldXY, WorldYZ, or WorldZX.".format(plane)}
             res = rs.OffsetCurve(System.Guid(curve_id), pl, distance)
             sc.doc.Views.Redraw()
             return {"status": "success", "result_ids": [str(i) for i in (res or [])]}
@@ -1074,7 +1094,23 @@ class RhinoMCPServer:
             code = params.get("code", "")
             if not code:
                 return {"status": "error", "message": "No code provided"}
-            
+
+            # Basic deny-list safeguard against dangerous operations
+            _denied_imports = ["subprocess", "shutil", "ctypes", "_winreg"]
+            _denied_calls = [
+                "os.system", "os.popen", "os.remove", "os.rmdir", "os.unlink",
+                "os.execl", "os.execle", "os.execlp", "os.execlpe",
+                "os.execv", "os.execve", "os.execvp", "os.execvpe",
+                "os.spawnl", "os.spawnle", "os.spawnlp", "os.spawnlpe",
+                "os.spawnv", "os.spawnve", "os.spawnvp", "os.spawnvpe",
+            ]
+            for _mod in _denied_imports:
+                if _mod in code:
+                    return {"status": "error", "message": "Blocked: import of '{0}' is not allowed".format(_mod)}
+            for _call in _denied_calls:
+                if _call in code:
+                    return {"status": "error", "message": "Blocked: '{0}' is not allowed".format(_call)}
+
             log_message("Executing code: {0}".format(code))
             
             # Create a list to store printed output
@@ -1750,661 +1786,623 @@ def _loft_sections(self, params):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 def _add_rhino_object_metadata(self, obj_id, name=None, description=None):
-        """Add standardized metadata to an object"""
-        try:
-            import json
-            import time
-            from datetime import datetime
-            
-            # Generate short ID
-            short_id = datetime.now().strftime("%d%H%M%S")
-            
-            # Get bounding box
-            bbox = rs.BoundingBox(obj_id)
-            bbox_data = [[p.X, p.Y, p.Z] for p in bbox] if bbox else []
-            
-            # Get object type
-            obj = sc.doc.Objects.Find(obj_id)
-            obj_type = obj.Geometry.GetType().Name if obj else "Unknown"
-            
-            # Standard metadata
-            metadata = {
-                "short_id": short_id,
-                "created_at": time.time(),
-                "layer": rs.ObjectLayer(obj_id),
-                "type": obj_type,
-                "bbox": bbox_data
-            }
-            
-            # User-provided metadata
-            if name:
-                rs.ObjectName(obj_id, name)
-                metadata["name"] = name
-            else:
-                # Auto-generate name if none provided
-                auto_name = "{0}_{1}".format(obj_type, short_id)
-                rs.ObjectName(obj_id, auto_name)
-                metadata["name"] = auto_name
-                
-            if description:
-                metadata["description"] = description
-                
-            # Store metadata as user text (convert bbox to string for storage)
-            user_text_data = metadata.copy()
-            user_text_data["bbox"] = json.dumps(bbox_data)
-            
-            # Add all metadata as user text
-            for key, value in user_text_data.items():
-                rs.SetUserText(obj_id, key, str(value))
-                
-            return {"status": "success"}
-        except Exception as e:
-            log_message("Error adding metadata: " + str(e))
-            return {"status": "error", "message": str(e)}
+    """Add standardized metadata to an object"""
+    try:
+        import json
+        import time
+        from datetime import datetime
 
-    def _get_rhino_objects_with_metadata(self, params):
-        """Get objects with their metadata, with optional filtering"""
-        try:
-            import re
-            import json
-            
-            filters = params.get("filters", {})
-            metadata_fields = params.get("metadata_fields")
-            layer_filter = filters.get("layer")
-            name_filter = filters.get("name")
-            id_filter = filters.get("short_id")
-            
-            # Validate metadata fields
-            all_fields = VALID_METADATA_FIELDS['required'] + VALID_METADATA_FIELDS['optional']
+        # Generate short ID with milliseconds to avoid collisions
+        _now = datetime.now()
+        short_id = _now.strftime("%d%H%M%S") + "{0:03d}".format(_now.microsecond // 1000)
+
+        # Get bounding box
+        bbox = rs.BoundingBox(obj_id)
+        bbox_data = [[p.X, p.Y, p.Z] for p in bbox] if bbox else []
+
+        # Get object type
+        obj = sc.doc.Objects.Find(obj_id)
+        obj_type = obj.Geometry.GetType().Name if obj else "Unknown"
+
+        # Standard metadata
+        metadata = {
+            "short_id": short_id,
+            "created_at": time.time(),
+            "layer": rs.ObjectLayer(obj_id),
+            "type": obj_type,
+            "bbox": bbox_data
+        }
+
+        # User-provided metadata
+        if name:
+            rs.ObjectName(obj_id, name)
+            metadata["name"] = name
+        else:
+            # Auto-generate name if none provided
+            auto_name = "{0}_{1}".format(obj_type, short_id)
+            rs.ObjectName(obj_id, auto_name)
+            metadata["name"] = auto_name
+
+        if description:
+            metadata["description"] = description
+
+        # Store metadata as user text (convert bbox to string for storage)
+        user_text_data = metadata.copy()
+        user_text_data["bbox"] = json.dumps(bbox_data)
+
+        # Add all metadata as user text
+        for key, value in user_text_data.items():
+            rs.SetUserText(obj_id, key, str(value))
+
+        return {"status": "success"}
+    except Exception as e:
+        log_message("Error adding metadata: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _get_rhino_objects_with_metadata(self, params):
+    """Get objects with their metadata, with optional filtering"""
+    try:
+        import re
+        import json
+
+        filters = params.get("filters", {})
+        metadata_fields = params.get("metadata_fields")
+        layer_filter = filters.get("layer")
+        name_filter = filters.get("name")
+        id_filter = filters.get("short_id")
+
+        # Validate metadata fields
+        all_fields = VALID_METADATA_FIELDS['required'] + VALID_METADATA_FIELDS['optional']
+        if metadata_fields:
+            invalid_fields = [f for f in metadata_fields if f not in all_fields]
+            if invalid_fields:
+                return {
+                    "status": "error",
+                    "message": "Invalid metadata fields: " + ", ".join(invalid_fields),
+                    "available_fields": all_fields
+                }
+
+        objects = []
+
+        for obj in sc.doc.Objects:
+            obj_id = obj.Id
+
+            # Apply filters
+            if layer_filter:
+                layer = rs.ObjectLayer(obj_id)
+                pattern = "^" + layer_filter.replace("*", ".*") + "$"
+                if not re.match(pattern, layer, re.IGNORECASE):
+                    continue
+
+            if name_filter:
+                name = obj.Name or ""
+                pattern = "^" + name_filter.replace("*", ".*") + "$"
+                if not re.match(pattern, name, re.IGNORECASE):
+                    continue
+
+            if id_filter:
+                short_id = rs.GetUserText(obj_id, "short_id") or ""
+                if short_id != id_filter:
+                    continue
+
+            # Build base object data with required fields
+            obj_data = {
+                "id": str(obj_id),
+                "name": obj.Name or "Unnamed",
+                "type": obj.Geometry.GetType().Name,
+                "layer": rs.ObjectLayer(obj_id)
+            }
+
+            # Get user text data and parse stored values
+            stored_data = {}
+            for key in rs.GetUserText(obj_id):
+                value = rs.GetUserText(obj_id, key)
+                if key == "bbox":
+                    try:
+                        value = json.loads(value)
+                    except:
+                        value = []
+                elif key == "created_at":
+                    try:
+                        value = float(value)
+                    except:
+                        value = 0
+                stored_data[key] = value
+
+            # Build metadata based on requested fields
             if metadata_fields:
-                invalid_fields = [f for f in metadata_fields if f not in all_fields]
-                if invalid_fields:
-                    return {
-                        "status": "error",
-                        "message": "Invalid metadata fields: " + ", ".join(invalid_fields),
-                        "available_fields": all_fields
-                    }
-            
-            objects = []
-            
+                metadata = {k: stored_data[k] for k in metadata_fields if k in stored_data}
+            else:
+                metadata = {k: v for k, v in stored_data.items()
+                          if k not in VALID_METADATA_FIELDS['required']}
+
+            # Only include user_text if specifically requested
+            if not metadata_fields or 'user_text' in metadata_fields:
+                user_text = {k: v for k, v in stored_data.items()
+                           if k not in metadata}
+                if user_text:
+                    obj_data["user_text"] = user_text
+
+            # Add metadata if we have any
+            if metadata:
+                obj_data["metadata"] = metadata
+
+            objects.append(obj_data)
+
+        return {
+            "status": "success",
+            "count": len(objects),
+            "objects": objects,
+            "available_fields": all_fields
+        }
+
+    except Exception as e:
+        log_message("Error filtering objects: " + str(e))
+        return {
+            "status": "error",
+            "message": str(e),
+            "available_fields": all_fields
+        }
+
+def _capture_rhino_viewport(self, params):
+    """Capture viewport with optional annotations and layer filtering"""
+    try:
+        layer_name = params.get("layer")
+        show_annotations = params.get("show_annotations", True)
+        max_size = params.get("max_size", 800)  # Default max dimension
+        original_layer = rs.CurrentLayer()
+        temp_dots = []
+
+        if show_annotations:
+            # Ensure annotation layer exists and is current
+            if not rs.IsLayer(ANNOTATION_LAYER):
+                rs.AddLayer(ANNOTATION_LAYER, color=(255, 0, 0))
+            rs.CurrentLayer(ANNOTATION_LAYER)
+
+            # Create temporary text dots for each object
             for obj in sc.doc.Objects:
-                obj_id = obj.Id
-                
-                # Apply filters
-                if layer_filter:
-                    layer = rs.ObjectLayer(obj_id)
-                    pattern = "^" + layer_filter.replace("*", ".*") + "$"
-                    if not re.match(pattern, layer, re.IGNORECASE):
-                        continue
-                    
-                if name_filter:
-                    name = obj.Name or ""
-                    pattern = "^" + name_filter.replace("*", ".*") + "$"
-                    if not re.match(pattern, name, re.IGNORECASE):
-                        continue
-                    
-                if id_filter:
-                    short_id = rs.GetUserText(obj_id, "short_id") or ""
-                    if short_id != id_filter:
-                        continue
-                    
-                # Build base object data with required fields
+                if layer_name and rs.ObjectLayer(obj.Id) != layer_name:
+                    continue
+
+                bbox = rs.BoundingBox(obj.Id)
+                if bbox:
+                    pt = bbox[1]  # Use top corner of bounding box
+                    short_id = rs.GetUserText(obj.Id, "short_id")
+                    if not short_id:
+                        _now = datetime.now()
+                        short_id = _now.strftime("%d%H%M%S") + "{0:03d}".format(_now.microsecond // 1000)
+                        rs.SetUserText(obj.Id, "short_id", short_id)
+
+                    name = rs.ObjectName(obj.Id) or "Unnamed"
+                    text = "{0}\n{1}".format(name, short_id)
+
+                    dot_id = rs.AddTextDot(text, pt)
+                    rs.TextDotHeight(dot_id, 8)
+                    temp_dots.append(dot_id)
+
+        try:
+            view = sc.doc.Views.ActiveView
+            memory_stream = MemoryStream()
+
+            # Capture to bitmap
+            bitmap = view.CaptureToBitmap()
+
+            # Calculate new dimensions while maintaining aspect ratio
+            width, height = bitmap.Width, bitmap.Height
+            if width > height:
+                new_width = max_size
+                new_height = int(height * (max_size / width))
+            else:
+                new_height = max_size
+                new_width = int(width * (max_size / height))
+
+            # Create resized bitmap
+            resized_bitmap = Bitmap(bitmap, new_width, new_height)
+
+            # Save as JPEG (IronPython doesn't support quality parameter)
+            resized_bitmap.Save(memory_stream, ImageFormat.Jpeg)
+
+            bytes_array = memory_stream.ToArray()
+            image_data = base64.b64encode(bytes(bytearray(bytes_array))).decode('utf-8')
+
+            # Clean up
+            bitmap.Dispose()
+            resized_bitmap.Dispose()
+            memory_stream.Dispose()
+
+        finally:
+            if temp_dots:
+                rs.DeleteObjects(temp_dots)
+            rs.CurrentLayer(original_layer)
+
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": image_data
+            }
+        }
+
+    except Exception as e:
+        log_message("Error capturing viewport: " + str(e))
+        if 'original_layer' in locals():
+            rs.CurrentLayer(original_layer)
+        return {
+            "type": "text",
+            "text": "Error capturing viewport: " + str(e)
+        }
+
+def _get_rhino_selected_objects(self, params):
+    """Get objects that are currently selected in Rhino, including subobject metadata"""
+    try:
+        include_lights = params.get("include_lights", False)
+        include_grips = params.get("include_grips", False)
+        include_subobjects = params.get("include_subobjects", True)
+
+        selected_objects = []
+
+        # Use rs.SelectedObjects() to get already-selected objects without prompting
+        sel_ids = rs.SelectedObjects()
+        if not sel_ids:
+            return {
+                "status": "success",
+                "count": 0,
+                "objects": [],
+            }
+
+        log_message("Found {0} selected objects".format(len(sel_ids)))
+
+        for obj_id in sel_ids:
+            obj = sc.doc.Objects.Find(obj_id)
+            if not obj:
+                continue
+
+            # Check if this object has subobject selections
+            has_subobjects = False
+            subobject_list = []
+            if include_subobjects and hasattr(obj, 'GetSelectedSubObjects'):
+                sub_indices = obj.GetSelectedSubObjects()
+                if sub_indices and len(sub_indices) > 0:
+                    has_subobjects = True
+                    for ci in sub_indices:
+                        subobject_list.append({
+                            "index": ci.Index,
+                            "type": str(ci.ComponentIndexType)
+                        })
+
+            if has_subobjects:
                 obj_data = {
                     "id": str(obj_id),
                     "name": obj.Name or "Unnamed",
-                    "type": obj.Geometry.GetType().Name,
-                    "layer": rs.ObjectLayer(obj_id)
-                }
-                
-                # Get user text data and parse stored values
-                stored_data = {}
-                for key in rs.GetUserText(obj_id):
-                    value = rs.GetUserText(obj_id, key)
-                    if key == "bbox":
-                        try:
-                            value = json.loads(value)
-                        except:
-                            value = []
-                    elif key == "created_at":
-                        try:
-                            value = float(value)
-                        except:
-                            value = 0
-                    stored_data[key] = value
-                
-                # Build metadata based on requested fields
-                if metadata_fields:
-                    metadata = {k: stored_data[k] for k in metadata_fields if k in stored_data}
-                else:
-                    metadata = {k: v for k, v in stored_data.items() 
-                              if k not in VALID_METADATA_FIELDS['required']}
-                
-                # Only include user_text if specifically requested
-                if not metadata_fields or 'user_text' in metadata_fields:
-                    user_text = {k: v for k, v in stored_data.items() 
-                               if k not in metadata}
-                    if user_text:
-                        obj_data["user_text"] = user_text
-                
-                # Add metadata if we have any
-                if metadata:
-                    obj_data["metadata"] = metadata
-                    
-                objects.append(obj_data)
-            
-            return {
-                "status": "success",
-                "count": len(objects),
-                "objects": objects,
-                "available_fields": all_fields
-            }
-            
-        except Exception as e:
-            log_message("Error filtering objects: " + str(e))
-            return {
-                "status": "error",
-                "message": str(e),
-                "available_fields": all_fields
-            }
-
-    def _capture_rhino_viewport(self, params):
-        """Capture viewport with optional annotations and layer filtering"""
-        try:
-            layer_name = params.get("layer")
-            show_annotations = params.get("show_annotations", True)
-            max_size = params.get("max_size", 800)  # Default max dimension
-            original_layer = rs.CurrentLayer()
-            temp_dots = []
-
-            if show_annotations:
-                # Ensure annotation layer exists and is current
-                if not rs.IsLayer(ANNOTATION_LAYER):
-                    rs.AddLayer(ANNOTATION_LAYER, color=(255, 0, 0))
-                rs.CurrentLayer(ANNOTATION_LAYER)
-                
-                # Create temporary text dots for each object
-                for obj in sc.doc.Objects:
-                    if layer_name and rs.ObjectLayer(obj.Id) != layer_name:
-                        continue
-                        
-                    bbox = rs.BoundingBox(obj.Id)
-                    if bbox:
-                        pt = bbox[1]  # Use top corner of bounding box
-                        short_id = rs.GetUserText(obj.Id, "short_id")
-                        if not short_id:
-                            short_id = datetime.now().strftime("%d%H%M%S")
-                            rs.SetUserText(obj.Id, "short_id", short_id)
-                        
-                        name = rs.ObjectName(obj.Id) or "Unnamed"
-                        text = "{0}\n{1}".format(name, short_id)
-                        
-                        dot_id = rs.AddTextDot(text, pt)
-                        rs.TextDotHeight(dot_id, 8)
-                        temp_dots.append(dot_id)
-            
-            try:
-                view = sc.doc.Views.ActiveView
-                memory_stream = MemoryStream()
-                
-                # Capture to bitmap
-                bitmap = view.CaptureToBitmap()
-                
-                # Calculate new dimensions while maintaining aspect ratio
-                width, height = bitmap.Width, bitmap.Height
-                if width > height:
-                    new_width = max_size
-                    new_height = int(height * (max_size / width))
-                else:
-                    new_height = max_size
-                    new_width = int(width * (max_size / height))
-                
-                # Create resized bitmap
-                resized_bitmap = Bitmap(bitmap, new_width, new_height)
-                
-                # Save as JPEG (IronPython doesn't support quality parameter)
-                resized_bitmap.Save(memory_stream, ImageFormat.Jpeg)
-                
-                bytes_array = memory_stream.ToArray()
-                image_data = base64.b64encode(bytes(bytearray(bytes_array))).decode('utf-8')
-                
-                # Clean up
-                bitmap.Dispose()
-                resized_bitmap.Dispose()
-                memory_stream.Dispose()
-                
-            finally:
-                if temp_dots:
-                    rs.DeleteObjects(temp_dots)
-                rs.CurrentLayer(original_layer)
-            
-            return {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": image_data
-                }
-            }
-            
-        except Exception as e:
-            log_message("Error capturing viewport: " + str(e))
-            if 'original_layer' in locals():
-                rs.CurrentLayer(original_layer)
-            return {
-                "type": "text",
-                "text": "Error capturing viewport: " + str(e)
-            }
-
-    def _get_rhino_selected_objects(self, params):
-        """Get objects that are currently selected in Rhino, including subobjects"""
-        try:            
-            include_lights = params.get("include_lights", False)
-            include_grips = params.get("include_grips", False)
-            include_subobjects = params.get("include_subobjects", True)
-
-            selected_objects = []
-            
-            # Handle subobject selections if enabled
-            if include_subobjects:
-                object_count = sc.doc.Objects.Count
-
-                log_message("Checking {0} objects for both sub-objects and full-objects selection...".format(object_count))
-
-                # Create GetObject for interactive selection
-                go = Rhino.Input.Custom.GetObject()
-                go.SetCommandPrompt("Select objects or subobjects (Enter when done)")
-                go.SubObjectSelect = True  # Enable subobject selection
-                go.DeselectAllBeforePostSelect = False
-                go.EnableBottomObjectPreference = True  # Prefer edges over surfaces
-                
-                # Allow multiple selection
-                result = go.GetMultiple(0, 0)  # min=0, max=0 means any number
-                
-                if result == Rhino.Input.GetResult.Object:
-                    object_count = go.ObjectCount
-                    if not object_count:
-                        log_message("No objects selected")
-                        return {
-                            "status": "error",
-                            "message": "No objects selected"
-                        }
-                    for i in range(object_count):
-                        objref = go.Object(i)
-                        obj = objref.Object()
-                        
-                        # Check if this is a subobject selection
-                        component_index = objref.GeometryComponentIndex
-                        
-                        if component_index.ComponentIndexType != Rhino.Geometry.ComponentIndexType.InvalidType:
-                            # This is a subobject selection
-                            obj_id = obj.Id
-                            
-                            # Check if we already have this object in our list
-                            existing_obj = None
-                            for existing in selected_objects:
-                                if existing["id"] == str(obj_id) and existing["selection_type"] == "subobject":
-                                    existing_obj = existing
-                                    break
-                            
-                            if existing_obj:
-                                # Add to existing subobject list
-                                existing_obj["subobjects"].append({
-                                    "index": component_index.Index,
-                                    "type": str(component_index.ComponentIndexType)
-                                })
-                            else:
-                                # Create new entry
-                                obj_data = {
-                                    "id": str(obj_id),
-                                    "name": obj.Name or "Unnamed",
-                                    "type": obj.Geometry.GetType().Name if obj.Geometry else "Unknown",
-                                    "layer": rs.ObjectLayer(obj_id),
-                                    "selection_type": "subobject",
-                                    "subobjects": [{
-                                        "index": component_index.Index,
-                                        "type": str(component_index.ComponentIndexType)
-                                    }]
-                                }
-                                
-                                # Get metadata
-                                user_strings = {}
-                                for key in rs.GetUserText(obj_id):
-                                    user_strings[key] = rs.GetUserText(obj_id, key)
-                                
-                                if user_strings:
-                                    obj_data["metadata"] = user_strings
-                                    
-                                selected_objects.append(obj_data)
-                        else:
-                            # This is a full object selection
-                            obj_data = {
-                                "id": str(obj.Id),
-                                "name": obj.Name or "Unnamed",
-                                "type": obj.Geometry.GetType().Name if obj.Geometry else "Unknown",
-                                "layer": rs.ObjectLayer(obj.Id),
-                                "selection_type": "full"
-                            }
-                            
-                            # Get metadata
-                            user_strings = {}
-                            for key in rs.GetUserText(obj.Id):
-                                user_strings[key] = rs.GetUserText(obj.Id, key)
-                            
-                            if user_strings:
-                                obj_data["metadata"] = user_strings
-                                
-                            selected_objects.append(obj_data)
-                
-                go.Dispose()
-            
-            return {
-                "status": "success",
-                "count": len(selected_objects),
-                "objects": selected_objects,
-            }
-            
-        except Exception as e:
-            log_message("Error getting selected objects: " + str(e))
-            return {"status": "error", "message": str(e)}
-
-    def _grasshopper_add_components(self, params):
-        """Add components to the current Grasshopper definition"""
-        try:
-            components = params.get("components", [])
-            if not components:
-                return {"status": "error", "message": "No components specified"}
-            
-            # Get Grasshopper plugin
-            gh = rs.GetPlugInObject('Grasshopper')
-            if not gh:
-                return {"status": "error", "message": "Grasshopper plugin not available"}
-            
-            if not gh.IsEditorLoaded():
-                return {"status": "error", "message": "Grasshopper editor is not loaded"}
-            
-            if not Instances:
-                return {"status": "error", "message": "Grasshopper Instances not available"}
-            
-            doc = Instances.ActiveCanvas.Document
-            if not doc:
-                return {"status": "error", "message": "No active Grasshopper document"}
-            
-            created_components = []
-            component_objects = []
-            
-            # Create components using direct instantiation
-            for i, comp_def in enumerate(components):
-                comp_type = comp_def.get("type")
-                position = comp_def.get("position", [100 + i * 100, 100])
-                name = comp_def.get("name")
-                
-                try:
-                    component = None
-                    
-                    # Create components based on type - using direct instantiation
-                    if comp_type == "Number Slider" and Special:
-                        component = Special.GH_NumberSlider()
-                    elif comp_type == "Number" and Params:
-                        component = Params.Param_Number()
-                    elif comp_type == "Integer" and Params:
-                        component = Params.Param_Integer()
-                    elif comp_type == "Boolean" and Params:
-                        component = Params.Param_Boolean()
-                    elif comp_type == "Point" and Params:
-                        component = Params.Param_Point()
-                    elif comp_type == "Vector" and Params:
-                        component = Params.Param_Vector()
-                    elif comp_type == "Text" and Params:
-                        component = Params.Param_String()
-                    else:
-                        # Try to create using Grasshopper plugin's component creation
-                        gh = rs.GetPlugInObject('Grasshopper')
-                        if gh and hasattr(gh, 'CreateComponent'):
-                            try:
-                                component = gh.CreateComponent(comp_type)
-                            except:
-                                pass
-                    
-                    if not component:
-                        log_message("Unknown component type: {0}".format(comp_type))
-                        continue
-                    
-                    # Set position
-                    component.CreateAttributes()
-                    if component.Attributes:
-                        component.Attributes.Pivot = PointF(float(position[0]), float(position[1]))
-                    
-                    # Set custom name if provided
-                    if name:
-                        component.NickName = name
-                    
-                    # Add to document
-                    doc.AddObject(component, False)
-                    
-                    created_components.append({
-                        "index": i,
-                        "type": comp_type,
-                        "position": position,
-                        "name": name or comp_type,
-                        "id": str(component.InstanceGuid)
-                    })
-                    
-                    component_objects.append(component)
-                    
-                except Exception as e:
-                    log_message("Error creating component {0}: {1}".format(comp_type, str(e)))
-                    continue
-            
-            # Handle connections
-            for i, comp_def in enumerate(components):
-                connections = comp_def.get("connections", [])
-                if not connections or i >= len(component_objects):
-                    continue
-                    
-                target_component = component_objects[i]
-                
-                for conn in connections:
-                    try:
-                        from_idx = conn.get("from_component", 0)
-                        from_output = conn.get("from_output", 0)
-                        to_input = conn.get("to_input", 0)
-                        
-                        if from_idx < len(component_objects):
-                            source_component = component_objects[from_idx]
-                            
-                            # Connect components
-                            if (hasattr(target_component, 'Params') and hasattr(source_component, 'Params') and
-                                to_input < len(target_component.Params.Input) and 
-                                from_output < len(source_component.Params.Output)):
-                                target_component.Params.Input[to_input].AddSource(
-                                    source_component.Params.Output[from_output]
-                                )
-                    except Exception as e:
-                        log_message("Error connecting components: {0}".format(str(e)))
-                        continue
-            
-            # Refresh canvas and run solver
-            try:
-                Instances.ActiveCanvas.Refresh()
-                gh.RunSolver(True)
-            except Exception as e:
-                log_message("Error refreshing canvas or running solver: {0}".format(str(e)))
-            
-            return {
-                "status": "success",
-                "message": "Added {0} components to Grasshopper".format(len(created_components)),
-                "components": created_components
-            }
-            
-        except Exception as e:
-            log_message("Error adding Grasshopper components: " + str(e))
-            return {"status": "error", "message": str(e)}
-
-    def _grasshopper_get_definition_info(self):
-        """Get information about the current Grasshopper definition"""
-        try:
-            # Get Grasshopper plugin
-            gh = rs.GetPlugInObject('Grasshopper')
-            if not gh:
-                return {"status": "error", "message": "Grasshopper plugin not available"}
-            
-            info = {
-                "editor_loaded": gh.IsEditorLoaded(),
-                "components": [],
-                "component_count": 0
-            }
-            
-            if gh.IsEditorLoaded() and Instances:
-                
-                doc = Instances.ActiveCanvas.Document
-                if doc:
-                    components_info = []
-                    
-                    for obj in doc.Objects:
-                        if hasattr(obj, 'ComponentGuid'):
-                            comp_info = {
-                                "id": str(obj.InstanceGuid),
-                                "type": obj.Name,
-                                "nickname": obj.NickName,
-                                "position": [obj.Attributes.Pivot.X, obj.Attributes.Pivot.Y] if obj.Attributes else [0, 0],
-                                "input_count": len(obj.Params.Input) if hasattr(obj, 'Params') else 0,
-                                "output_count": len(obj.Params.Output) if hasattr(obj, 'Params') else 0
-                            }
-                            components_info.append(comp_info)
-                    
-                    info["components"] = components_info
-                    info["component_count"] = len(components_info)
-            
-            return {
-                "status": "success",
-                "info": info
-            }
-            
-        except Exception as e:
-            log_message("Error getting Grasshopper definition info: " + str(e))
-            return {"status": "error", "message": str(e)}
-
-    def _grasshopper_run_solver(self, params):
-        """Run the Grasshopper solver"""
-        try:
-            force_update = params.get("force_update", True)
-            
-            # Get Grasshopper plugin
-            gh = rs.GetPlugInObject('Grasshopper')
-            if not gh:
-                return {"status": "error", "message": "Grasshopper plugin not available"}
-            
-            if not gh.IsEditorLoaded():
-                return {"status": "error", "message": "Grasshopper editor is not loaded"}
-            
-            # Run solver
-            gh.RunSolver(force_update)
-            
-            return {
-                "status": "success",
-                "message": "Grasshopper solver executed successfully"
-            }
-            
-        except Exception as e:
-            log_message("Error running Grasshopper solver: " + str(e))
-            return {"status": "error", "message": str(e)}
-
-    def _grasshopper_clear_canvas(self):
-        """Clear all components from the Grasshopper canvas"""
-        try:
-            # Get Grasshopper plugin
-            gh = rs.GetPlugInObject('Grasshopper')
-            if not gh:
-                return {"status": "error", "message": "Grasshopper plugin not available"}
-            
-            if not gh.IsEditorLoaded():
-                return {"status": "error", "message": "Grasshopper editor is not loaded"}
-            
-            if not Instances:
-                return {"status": "error", "message": "Grasshopper Instances not available"}
-            
-            doc = Instances.ActiveCanvas.Document
-            if doc:
-                # Clear all objects
-                doc.Objects.Clear()
-                
-                # Refresh canvas
-                Instances.ActiveCanvas.Refresh()
-                
-                return {
-                    "status": "success",
-                    "message": "Grasshopper canvas cleared successfully"
+                    "type": obj.Geometry.GetType().Name if obj.Geometry else "Unknown",
+                    "layer": rs.ObjectLayer(obj_id),
+                    "selection_type": "subobject",
+                    "subobjects": subobject_list
                 }
             else:
-                return {"status": "error", "message": "No active Grasshopper document"}
-            
-        except Exception as e:
-            log_message("Error clearing Grasshopper canvas: " + str(e))
-            return {"status": "error", "message": str(e)}
-    
-    def _grasshopper_list_available_components(self):
-        """List all available Grasshopper components for debugging"""
+                obj_data = {
+                    "id": str(obj_id),
+                    "name": obj.Name or "Unnamed",
+                    "type": obj.Geometry.GetType().Name if obj.Geometry else "Unknown",
+                    "layer": rs.ObjectLayer(obj_id),
+                    "selection_type": "full"
+                }
+
+            # Get metadata
+            user_strings = {}
+            user_keys = rs.GetUserText(obj_id)
+            if user_keys:
+                for key in user_keys:
+                    user_strings[key] = rs.GetUserText(obj_id, key)
+
+            if user_strings:
+                obj_data["metadata"] = user_strings
+
+            selected_objects.append(obj_data)
+
+        return {
+            "status": "success",
+            "count": len(selected_objects),
+            "objects": selected_objects,
+        }
+
+    except Exception as e:
+        log_message("Error getting selected objects: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _grasshopper_add_components(self, params):
+    """Add components to the current Grasshopper definition"""
+    try:
+        components = params.get("components", [])
+        if not components:
+            return {"status": "error", "message": "No components specified"}
+
+        # Get Grasshopper plugin
+        gh = rs.GetPlugInObject('Grasshopper')
+        if not gh:
+            return {"status": "error", "message": "Grasshopper plugin not available"}
+
+        if not gh.IsEditorLoaded():
+            return {"status": "error", "message": "Grasshopper editor is not loaded"}
+
+        if not Instances:
+            return {"status": "error", "message": "Grasshopper Instances not available"}
+
+        doc = Instances.ActiveCanvas.Document
+        if not doc:
+            return {"status": "error", "message": "No active Grasshopper document"}
+
+        created_components = []
+        component_objects = []
+
+        # Create components using direct instantiation
+        for i, comp_def in enumerate(components):
+            comp_type = comp_def.get("type")
+            position = comp_def.get("position", [100 + i * 100, 100])
+            name = comp_def.get("name")
+
+            try:
+                component = None
+
+                # Create components based on type - using direct instantiation
+                if comp_type == "Number Slider" and Special:
+                    component = Special.GH_NumberSlider()
+                elif comp_type == "Number" and Params:
+                    component = Params.Param_Number()
+                elif comp_type == "Integer" and Params:
+                    component = Params.Param_Integer()
+                elif comp_type == "Boolean" and Params:
+                    component = Params.Param_Boolean()
+                elif comp_type == "Point" and Params:
+                    component = Params.Param_Point()
+                elif comp_type == "Vector" and Params:
+                    component = Params.Param_Vector()
+                elif comp_type == "Text" and Params:
+                    component = Params.Param_String()
+                else:
+                    # Try to create using Grasshopper plugin's component creation
+                    gh = rs.GetPlugInObject('Grasshopper')
+                    if gh and hasattr(gh, 'CreateComponent'):
+                        try:
+                            component = gh.CreateComponent(comp_type)
+                        except:
+                            pass
+
+                if not component:
+                    log_message("Unknown component type: {0}".format(comp_type))
+                    continue
+
+                # Set position
+                component.CreateAttributes()
+                if component.Attributes:
+                    component.Attributes.Pivot = PointF(float(position[0]), float(position[1]))
+
+                # Set custom name if provided
+                if name:
+                    component.NickName = name
+
+                # Add to document
+                doc.AddObject(component, False)
+
+                created_components.append({
+                    "index": i,
+                    "type": comp_type,
+                    "position": position,
+                    "name": name or comp_type,
+                    "id": str(component.InstanceGuid)
+                })
+
+                component_objects.append(component)
+
+            except Exception as e:
+                log_message("Error creating component {0}: {1}".format(comp_type, str(e)))
+                continue
+
+        # Handle connections
+        for i, comp_def in enumerate(components):
+            connections = comp_def.get("connections", [])
+            if not connections or i >= len(component_objects):
+                continue
+
+            target_component = component_objects[i]
+
+            for conn in connections:
+                try:
+                    from_idx = conn.get("from_component", 0)
+                    from_output = conn.get("from_output", 0)
+                    to_input = conn.get("to_input", 0)
+
+                    if from_idx < len(component_objects):
+                        source_component = component_objects[from_idx]
+
+                        # Connect components
+                        if (hasattr(target_component, 'Params') and hasattr(source_component, 'Params') and
+                            to_input < len(target_component.Params.Input) and
+                            from_output < len(source_component.Params.Output)):
+                            target_component.Params.Input[to_input].AddSource(
+                                source_component.Params.Output[from_output]
+                            )
+                except Exception as e:
+                    log_message("Error connecting components: {0}".format(str(e)))
+                    continue
+
+        # Refresh canvas and run solver
         try:
-            # Get Grasshopper plugin
-            gh = rs.GetPlugInObject('Grasshopper')
-            if not gh:
-                return {"status": "error", "message": "Grasshopper plugin not available"}
-            
-            if not gh.IsEditorLoaded():
-                return {"status": "error", "message": "Grasshopper editor is not loaded"}
-            
-            # Return list of supported component types
-            supported_components = [
-                {"name": "Number Slider", "category": "Params", "subcategory": "Input"},
-                {"name": "Number", "category": "Params", "subcategory": "Input"},
-                {"name": "Integer", "category": "Params", "subcategory": "Input"},
-                {"name": "Boolean", "category": "Params", "subcategory": "Input"},
-                {"name": "Point", "category": "Params", "subcategory": "Input"},
-                {"name": "Vector", "category": "Params", "subcategory": "Input"},
-                {"name": "Text", "category": "Params", "subcategory": "Input"},
-                {"name": "Series", "category": "Sets", "subcategory": "Sequence"},
-                {"name": "Range", "category": "Sets", "subcategory": "Sequence"},
-                {"name": "Cross Reference", "category": "Sets", "subcategory": "Tree"},
-                {"name": "Addition", "category": "Maths", "subcategory": "Operators"},
-                {"name": "Subtraction", "category": "Maths", "subcategory": "Operators"},
-                {"name": "Multiplication", "category": "Maths", "subcategory": "Operators"},
-                {"name": "Division", "category": "Maths", "subcategory": "Operators"},
-                {"name": "Line", "category": "Curve", "subcategory": "Primitive"},
-                {"name": "Circle", "category": "Curve", "subcategory": "Primitive"},
-                {"name": "Rectangle", "category": "Curve", "subcategory": "Primitive"},
-                {"name": "Polygon", "category": "Curve", "subcategory": "Primitive"},
-                {"name": "Extrude", "category": "Surface", "subcategory": "Freeform"},
-                {"name": "Move", "category": "Transform", "subcategory": "Euclidean"},
-                {"name": "Rotate", "category": "Transform", "subcategory": "Euclidean"},
-                {"name": "Scale", "category": "Transform", "subcategory": "Euclidean"},
-                {"name": "Construct Point", "category": "Vector", "subcategory": "Point"},
-            ]
-            
+            Instances.ActiveCanvas.Refresh()
+            gh.RunSolver(True)
+        except Exception as e:
+            log_message("Error refreshing canvas or running solver: {0}".format(str(e)))
+
+        return {
+            "status": "success",
+            "message": "Added {0} components to Grasshopper".format(len(created_components)),
+            "components": created_components
+        }
+
+    except Exception as e:
+        log_message("Error adding Grasshopper components: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _grasshopper_get_definition_info(self):
+    """Get information about the current Grasshopper definition"""
+    try:
+        # Get Grasshopper plugin
+        gh = rs.GetPlugInObject('Grasshopper')
+        if not gh:
+            return {"status": "error", "message": "Grasshopper plugin not available"}
+
+        info = {
+            "editor_loaded": gh.IsEditorLoaded(),
+            "components": [],
+            "component_count": 0
+        }
+
+        if gh.IsEditorLoaded() and Instances:
+
+            doc = Instances.ActiveCanvas.Document
+            if doc:
+                components_info = []
+
+                for obj in doc.Objects:
+                    if hasattr(obj, 'ComponentGuid'):
+                        comp_info = {
+                            "id": str(obj.InstanceGuid),
+                            "type": obj.Name,
+                            "nickname": obj.NickName,
+                            "position": [obj.Attributes.Pivot.X, obj.Attributes.Pivot.Y] if obj.Attributes else [0, 0],
+                            "input_count": len(obj.Params.Input) if hasattr(obj, 'Params') else 0,
+                            "output_count": len(obj.Params.Output) if hasattr(obj, 'Params') else 0
+                        }
+                        components_info.append(comp_info)
+
+                info["components"] = components_info
+                info["component_count"] = len(components_info)
+
+        return {
+            "status": "success",
+            "info": info
+        }
+
+    except Exception as e:
+        log_message("Error getting Grasshopper definition info: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _grasshopper_run_solver(self, params):
+    """Run the Grasshopper solver"""
+    try:
+        force_update = params.get("force_update", True)
+
+        # Get Grasshopper plugin
+        gh = rs.GetPlugInObject('Grasshopper')
+        if not gh:
+            return {"status": "error", "message": "Grasshopper plugin not available"}
+
+        if not gh.IsEditorLoaded():
+            return {"status": "error", "message": "Grasshopper editor is not loaded"}
+
+        # Run solver
+        gh.RunSolver(force_update)
+
+        return {
+            "status": "success",
+            "message": "Grasshopper solver executed successfully"
+        }
+
+    except Exception as e:
+        log_message("Error running Grasshopper solver: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _grasshopper_clear_canvas(self):
+    """Clear all components from the Grasshopper canvas"""
+    try:
+        # Get Grasshopper plugin
+        gh = rs.GetPlugInObject('Grasshopper')
+        if not gh:
+            return {"status": "error", "message": "Grasshopper plugin not available"}
+
+        if not gh.IsEditorLoaded():
+            return {"status": "error", "message": "Grasshopper editor is not loaded"}
+
+        if not Instances:
+            return {"status": "error", "message": "Grasshopper Instances not available"}
+
+        doc = Instances.ActiveCanvas.Document
+        if doc:
+            # Clear all objects
+            doc.Objects.Clear()
+
+            # Refresh canvas
+            Instances.ActiveCanvas.Refresh()
+
             return {
                 "status": "success",
-                "components": supported_components,
-                "count": len(supported_components),
-                "note": "This is a list of currently supported component types. More components may be available but not yet implemented."
+                "message": "Grasshopper canvas cleared successfully"
             }
-            
-        except Exception as e:
-            log_message("Error listing Grasshopper components: " + str(e))
-            return {"status": "error", "message": str(e)}
+        else:
+            return {"status": "error", "message": "No active Grasshopper document"}
+
+    except Exception as e:
+        log_message("Error clearing Grasshopper canvas: " + str(e))
+        return {"status": "error", "message": str(e)}
+
+def _grasshopper_list_available_components(self):
+    """List all available Grasshopper components for debugging"""
+    try:
+        # Get Grasshopper plugin
+        gh = rs.GetPlugInObject('Grasshopper')
+        if not gh:
+            return {"status": "error", "message": "Grasshopper plugin not available"}
+
+        if not gh.IsEditorLoaded():
+            return {"status": "error", "message": "Grasshopper editor is not loaded"}
+
+        # Return list of supported component types
+        supported_components = [
+            {"name": "Number Slider", "category": "Params", "subcategory": "Input"},
+            {"name": "Number", "category": "Params", "subcategory": "Input"},
+            {"name": "Integer", "category": "Params", "subcategory": "Input"},
+            {"name": "Boolean", "category": "Params", "subcategory": "Input"},
+            {"name": "Point", "category": "Params", "subcategory": "Input"},
+            {"name": "Vector", "category": "Params", "subcategory": "Input"},
+            {"name": "Text", "category": "Params", "subcategory": "Input"},
+            {"name": "Series", "category": "Sets", "subcategory": "Sequence"},
+            {"name": "Range", "category": "Sets", "subcategory": "Sequence"},
+            {"name": "Cross Reference", "category": "Sets", "subcategory": "Tree"},
+            {"name": "Addition", "category": "Maths", "subcategory": "Operators"},
+            {"name": "Subtraction", "category": "Maths", "subcategory": "Operators"},
+            {"name": "Multiplication", "category": "Maths", "subcategory": "Operators"},
+            {"name": "Division", "category": "Maths", "subcategory": "Operators"},
+            {"name": "Line", "category": "Curve", "subcategory": "Primitive"},
+            {"name": "Circle", "category": "Curve", "subcategory": "Primitive"},
+            {"name": "Rectangle", "category": "Curve", "subcategory": "Primitive"},
+            {"name": "Polygon", "category": "Curve", "subcategory": "Primitive"},
+            {"name": "Extrude", "category": "Surface", "subcategory": "Freeform"},
+            {"name": "Move", "category": "Transform", "subcategory": "Euclidean"},
+            {"name": "Rotate", "category": "Transform", "subcategory": "Euclidean"},
+            {"name": "Scale", "category": "Transform", "subcategory": "Euclidean"},
+            {"name": "Construct Point", "category": "Vector", "subcategory": "Point"},
+        ]
+
+        return {
+            "status": "success",
+            "components": supported_components,
+            "count": len(supported_components),
+            "note": "This is a list of currently supported component types. More components may be available but not yet implemented."
+        }
+
+    except Exception as e:
+        log_message("Error listing Grasshopper components: " + str(e))
+        return {"status": "error", "message": str(e)}
 
 # Create and start server
 server = RhinoMCPServer(HOST, PORT)
 server.start()
 
 # Add commands to Rhino
-def start_server():
-    """Start the RhinoMCP server"""
-    server.start()
-
 def stop_server():
     """Stop the RhinoMCP server"""
     server.stop()
 
-# Automatically start the server when this script is loaded
-start_server()
 log_message("RhinoMCP script loaded. Server started automatically.")
 log_message("To stop the server, run: stop_server()") 

@@ -12,7 +12,7 @@ try:
     env_path = Path(__file__).parent.parent / '.env'
     if env_path.exists():
         load_dotenv(dotenv_path=env_path)
-        logging.info(f"Loaded environment variables from {env_path}")
+        logging.info("Loaded environment variables from {0}".format(env_path))
 except ImportError:
     logging.warning("python-dotenv not installed. Install it to use .env files: pip install python-dotenv")
 
