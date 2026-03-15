@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "MCP Server (stdio)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"],
+      "port": 9876
+    },
+    {
+      "name": "SSE Server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["rhino_mcp/server_sse.py"],
+      "port": 8080
+    },
+    {
+      "name": "Web Server (FastAPI)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["rhino_mcp/web_server.py", "--host", "localhost", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

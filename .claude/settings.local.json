@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_script.py''\\).read\\(\\)\\); print\\(''SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_script.py''\\).read\\(\\)\\); print\\(''rhino_script.py: SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/rhino_tools.py''\\).read\\(\\)\\); print\\(''rhino_tools.py: SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/web_server.py''\\).read\\(\\)\\); print\\(''web_server.py: SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/server.py''\\).read\\(\\)\\); print\\(''server.py: SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/server_sse.py''\\).read\\(\\)\\); print\\(''server_sse.py: SYNTAX OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_script.py''\\).read\\(\\)\\); ast.parse\\(open\\(''yak-package/rhino_script.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/rhino_tools.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/web_server.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/server.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/server_sse.py''\\).read\\(\\)\\); print\\(''ALL FILES: SYNTAX OK''\\)\")",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
