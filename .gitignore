@@ -49,3 +49,4 @@ debug.log
 
 # Yak build output
 *.yak
+.claude/settings.local.json
