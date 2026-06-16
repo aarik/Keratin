@@ -203,6 +203,12 @@ class RhinoTools:
         self.app.tool()(self.grasshopper_clear_canvas)
         self.app.tool()(self.grasshopper_list_available_components)
 
+        # --- New individual RhinoScript tools (high-frequency functions) ---
+        self._register_individual_rs_tools()
+
+        # --- Category-level catch-all tools ---
+        self._register_category_tools()
+
     # ------------------------------
     # Contract-compatible tools
     # ------------------------------
@@ -678,6 +684,951 @@ class RhinoTools:
             return json.dumps(result, indent=2)
         except Exception as e:
             return "Error loft_sections: {0}".format(str(e))
+
+    # ------------------------------------------------------------------
+    # Individual RhinoScript tools (popular rs.* functions with typed params)
+    # ------------------------------------------------------------------
+
+    # Which rs.* functions are exposed as individual tools (excluded from category catch-alls)
+    INDIVIDUAL_RS_FUNCTIONS = {
+        # Curve creation
+        "AddLine", "AddPolyline", "AddCircle", "AddArc3Pt", "AddEllipse",
+        "AddInterpCurve", "AddNurbsCurve", "AddRectangle", "AddSpiral",
+        "AddBlendCurve", "AddFilletCurve",
+        # Curve query
+        "CurveLength", "CurveStartPoint", "CurveEndPoint", "CurveMidPoint",
+        "CurveClosestPoint", "CurveDomain", "CurveDegree", "CurvePointCount",
+        "CurvePoints", "CurveTangent", "CurveFrame", "CurveArea",
+        "IsCurve", "IsCurveClosed", "IsCurvePlanar",
+        # Curve operations
+        "DivideCurve", "DivideCurveEquidistant", "EvaluateCurve",
+        "OffsetCurve", "JoinCurves", "ExplodeCurves", "TrimCurve",
+        "SplitCurve", "ExtendCurve", "ExtendCurveLength",
+        "RebuildCurve", "ReverseCurve", "CloseCurve", "FitCurve",
+        # Surface creation
+        "AddSphere", "AddCylinder", "AddCone", "AddBox", "AddTorus",
+        "AddPipe", "AddPlanarSrf", "AddLoftSrf", "AddSweep1", "AddSweep2",
+        "AddRevSrf", "AddEdgeSrf", "AddNetworkSrf", "AddPatch",
+        "AddNurbsSurface", "AddSrfPt", "AddPlaneSurface",
+        # Surface operations
+        "ExtrudeCurve", "ExtrudeCurveStraight", "ExtrudeSurface",
+        "BooleanUnion", "BooleanDifference", "BooleanIntersection",
+        "CapPlanarHoles", "FilletSurfaces", "OffsetSurface",
+        "SplitBrep", "TrimBrep", "JoinSurfaces",
+        "DuplicateEdgeCurves", "DuplicateSurfaceBorder",
+        "ExplodePolysurfaces", "ExtractIsoCurve",
+        # Surface query
+        "SurfaceArea", "SurfaceVolume", "SurfaceNormal",
+        "SurfaceDomain", "SurfaceClosestPoint", "EvaluateSurface",
+        "IsSurface", "IsPolysurface", "IsPolysurfaceClosed", "IsBrep",
+        "BrepClosestPoint",
+        # Object operations
+        "CopyObject", "CopyObjects", "DeleteObject", "DeleteObjects",
+        "MoveObject", "MoveObjects", "RotateObject", "ScaleObject",
+        "MirrorObject", "TransformObject",
+        "HideObject", "ShowObject", "LockObject", "UnlockObject",
+        # Object properties
+        "ObjectLayer", "ObjectName", "ObjectColor", "ObjectType",
+        "ObjectMaterialIndex", "ObjectGroups", "IsObject", "IsObjectSolid",
+        "MatchObjectAttributes",
+        # Layer
+        "AddLayer", "DeleteLayer", "CurrentLayer", "LayerVisible",
+        "LayerColor", "LayerNames", "LayerLocked", "RenameLayer",
+        "PurgeLayer", "IsLayer", "LayerChildren", "ParentLayer",
+        # Geometry
+        "AddPoint", "AddPoints", "AddTextDot", "AddText",
+        "BoundingBox", "Area", "PointCoordinates",
+        # Selection
+        "AllObjects", "ObjectsByLayer", "ObjectsByType", "ObjectsByName",
+        "ObjectsByGroup", "SelectedObjects", "UnselectAllObjects",
+        "LastCreatedObjects",
+        # View
+        "ZoomExtents", "ZoomSelected", "ViewCamera", "ViewCameraTarget",
+        "CurrentView", "ViewDisplayMode", "Redraw", "EnableRedraw",
+        # Document
+        "UnitSystem", "UnitAbsoluteTolerance", "DocumentName",
+        # Mesh
+        "AddMesh", "MeshBooleanUnion", "MeshBooleanDifference",
+        "MeshBooleanIntersection", "JoinMeshes", "MeshToNurb",
+        "IsMesh", "MeshVertices", "MeshFaces", "MeshArea", "MeshVolume",
+        # Utility
+        "Distance", "Angle", "CullDuplicatePoints", "SortPointList",
+        # Transformation
+        "XformScale", "XformRotation1", "XformMirror", "XformTranslation",
+        # Group
+        "AddGroup", "AddObjectsToGroup", "DeleteGroup", "GroupNames",
+        # Material
+        "AddMaterialToLayer", "AddMaterialToObject", "MaterialColor",
+        "MaterialName",
+        # Block
+        "AddBlock", "InsertBlock", "ExplodeBlockInstance", "BlockNames",
+        "IsBlockInstance",
+        # Dimension
+        "AddLinearDimension", "AddAlignedDimension", "AddLeader",
+        # Plane
+        "PlaneFromNormal", "PlaneFromPoints", "WorldXYPlane",
+        # Userdata
+        "SetUserText", "GetUserText", "SetDocumentUserText", "GetDocumentUserText",
+    }
+
+    def _rs_dispatch(self, function_name: str, args: List = None, kwargs: Dict = None) -> str:
+        """Send a rhinoscript_dispatch command to Rhino."""
+        result = get_rhino_connection().send_command("rhinoscript_dispatch", {
+            "function_name": function_name,
+            "args": args or [],
+            "kwargs": kwargs or {},
+        })
+        return json.dumps(result, indent=2)
+
+    def _register_individual_rs_tools(self):
+        """Register individual MCP tools for high-frequency rs.* functions."""
+
+        # -- Curve creation --
+
+        def rs_AddLine(ctx: Context, start: List[float], end: List[float]) -> str:
+            """Add a line curve between two 3D points. Returns the curve GUID."""
+            return self._rs_dispatch("AddLine", [start, end])
+        self.app.tool()(rs_AddLine)
+
+        def rs_AddPolyline(ctx: Context, points: List[List[float]]) -> str:
+            """Add a polyline through a list of 3D points. Returns the curve GUID."""
+            return self._rs_dispatch("AddPolyline", [points])
+        self.app.tool()(rs_AddPolyline)
+
+        def rs_AddCircle(ctx: Context, center_or_plane: List[float], radius: float) -> str:
+            """Add a circle. center_or_plane is [x,y,z]. Returns the curve GUID."""
+            return self._rs_dispatch("AddCircle", [center_or_plane, radius])
+        self.app.tool()(rs_AddCircle)
+
+        def rs_AddArc3Pt(ctx: Context, start: List[float], end: List[float], point_on_arc: List[float]) -> str:
+            """Add an arc through three points. Returns the curve GUID."""
+            return self._rs_dispatch("AddArc3Pt", [start, end, point_on_arc])
+        self.app.tool()(rs_AddArc3Pt)
+
+        def rs_AddEllipse(ctx: Context, plane: List[float], rx: float, ry: float) -> str:
+            """Add an ellipse. plane can be a point [x,y,z] for WorldXY at that origin. Returns curve GUID."""
+            return self._rs_dispatch("AddEllipse", [plane, rx, ry])
+        self.app.tool()(rs_AddEllipse)
+
+        def rs_AddInterpCurve(ctx: Context, points: List[List[float]], degree: int = 3) -> str:
+            """Add an interpolated curve through points. Returns the curve GUID."""
+            return self._rs_dispatch("AddInterpCurve", [points, degree])
+        self.app.tool()(rs_AddInterpCurve)
+
+        def rs_AddNurbsCurve(ctx: Context, points: List[List[float]], knots: List[float], degree: int, weights: Optional[List[float]] = None) -> str:
+            """Add a NURBS curve from control points, knots, and degree. Returns curve GUID."""
+            args = [points, knots, degree]
+            if weights:
+                args.append(weights)
+            return self._rs_dispatch("AddNurbsCurve", args)
+        self.app.tool()(rs_AddNurbsCurve)
+
+        def rs_AddRectangle(ctx: Context, plane: List[float], width: float, height: float) -> str:
+            """Add a rectangular polyline. plane can be [x,y,z] for WorldXY at that point. Returns curve GUID."""
+            return self._rs_dispatch("AddRectangle", [plane, width, height])
+        self.app.tool()(rs_AddRectangle)
+
+        def rs_AddSpiral(ctx: Context, point0: List[float], point1: List[float], pitch: float, turns: float, radius0: float, radius1: Optional[float] = None) -> str:
+            """Add a spiral curve. Returns the curve GUID."""
+            args = [point0, point1, pitch, turns, radius0]
+            if radius1 is not None:
+                args.append(radius1)
+            return self._rs_dispatch("AddSpiral", args)
+        self.app.tool()(rs_AddSpiral)
+
+        def rs_AddBlendCurve(ctx: Context, curves: List[str], parameters: List[float], reverses: List[bool], continuities: List[int]) -> str:
+            """Add a blend curve between two curves. Returns the curve GUID."""
+            return self._rs_dispatch("AddBlendCurve", [curves, parameters, reverses, continuities])
+        self.app.tool()(rs_AddBlendCurve)
+
+        def rs_AddFilletCurve(ctx: Context, curve0: str, curve1: str, radius: float = 1.0, base_point0: Optional[List[float]] = None, base_point1: Optional[List[float]] = None) -> str:
+            """Add a fillet curve between two curves. Returns the curve GUID."""
+            args = [curve0, curve1, radius]
+            if base_point0:
+                args.append(base_point0)
+            if base_point1:
+                args.append(base_point1)
+            return self._rs_dispatch("AddFilletCurve", args)
+        self.app.tool()(rs_AddFilletCurve)
+
+        # -- Curve query --
+
+        def rs_CurveLength(ctx: Context, curve_id: str) -> str:
+            """Return the length of a curve."""
+            return self._rs_dispatch("CurveLength", [curve_id])
+        self.app.tool()(rs_CurveLength)
+
+        def rs_CurveStartPoint(ctx: Context, curve_id: str) -> str:
+            """Return the start point of a curve as [x,y,z]."""
+            return self._rs_dispatch("CurveStartPoint", [curve_id])
+        self.app.tool()(rs_CurveStartPoint)
+
+        def rs_CurveEndPoint(ctx: Context, curve_id: str) -> str:
+            """Return the end point of a curve as [x,y,z]."""
+            return self._rs_dispatch("CurveEndPoint", [curve_id])
+        self.app.tool()(rs_CurveEndPoint)
+
+        def rs_CurveMidPoint(ctx: Context, curve_id: str) -> str:
+            """Return the midpoint of a curve as [x,y,z]."""
+            return self._rs_dispatch("CurveMidPoint", [curve_id])
+        self.app.tool()(rs_CurveMidPoint)
+
+        def rs_CurveClosestPoint(ctx: Context, curve_id: str, test_point: List[float]) -> str:
+            """Return the parameter of the closest point on a curve to a test point."""
+            return self._rs_dispatch("CurveClosestPoint", [curve_id, test_point])
+        self.app.tool()(rs_CurveClosestPoint)
+
+        def rs_CurveDomain(ctx: Context, curve_id: str) -> str:
+            """Return the domain [t0, t1] of a curve."""
+            return self._rs_dispatch("CurveDomain", [curve_id])
+        self.app.tool()(rs_CurveDomain)
+
+        def rs_CurveArea(ctx: Context, curve_id: str) -> str:
+            """Return the area of a closed planar curve."""
+            return self._rs_dispatch("CurveArea", [curve_id])
+        self.app.tool()(rs_CurveArea)
+
+        def rs_CurveTangent(ctx: Context, curve_id: str, parameter: float) -> str:
+            """Return the tangent vector at a parameter on a curve."""
+            return self._rs_dispatch("CurveTangent", [curve_id, parameter])
+        self.app.tool()(rs_CurveTangent)
+
+        def rs_IsCurve(ctx: Context, object_id: str) -> str:
+            """Test if an object is a curve."""
+            return self._rs_dispatch("IsCurve", [object_id])
+        self.app.tool()(rs_IsCurve)
+
+        def rs_IsCurveClosed(ctx: Context, curve_id: str) -> str:
+            """Test if a curve is closed."""
+            return self._rs_dispatch("IsCurveClosed", [curve_id])
+        self.app.tool()(rs_IsCurveClosed)
+
+        # -- Curve operations --
+
+        def rs_DivideCurve(ctx: Context, curve_id: str, segments: int, create_points: bool = False) -> str:
+            """Divide a curve into segments. Returns list of points."""
+            return self._rs_dispatch("DivideCurve", [curve_id, segments, create_points])
+        self.app.tool()(rs_DivideCurve)
+
+        def rs_EvaluateCurve(ctx: Context, curve_id: str, parameter: float) -> str:
+            """Evaluate a curve at a parameter value. Returns [x,y,z]."""
+            return self._rs_dispatch("EvaluateCurve", [curve_id, parameter])
+        self.app.tool()(rs_EvaluateCurve)
+
+        def rs_OffsetCurve(ctx: Context, curve_id: str, direction: List[float], distance: float) -> str:
+            """Offset a curve. direction is a point indicating offset side. Returns list of curve GUIDs."""
+            return self._rs_dispatch("OffsetCurve", [curve_id, direction, distance])
+        self.app.tool()(rs_OffsetCurve)
+
+        def rs_JoinCurves(ctx: Context, curve_ids: List[str], delete_input: bool = False) -> str:
+            """Join multiple curves into polycurves. Returns list of joined curve GUIDs."""
+            return self._rs_dispatch("JoinCurves", [curve_ids, delete_input])
+        self.app.tool()(rs_JoinCurves)
+
+        def rs_ExplodeCurves(ctx: Context, curve_ids: List[str], delete_input: bool = False) -> str:
+            """Explode polycurves into segment curves. Returns list of curve GUIDs."""
+            return self._rs_dispatch("ExplodeCurves", [curve_ids, delete_input])
+        self.app.tool()(rs_ExplodeCurves)
+
+        def rs_SplitCurve(ctx: Context, curve_id: str, parameters: List[float], delete_input: bool = True) -> str:
+            """Split a curve at parameters. Returns list of new curve GUIDs."""
+            return self._rs_dispatch("SplitCurve", [curve_id, parameters, delete_input])
+        self.app.tool()(rs_SplitCurve)
+
+        def rs_RebuildCurve(ctx: Context, curve_id: str, degree: int = 3, point_count: int = 10) -> str:
+            """Rebuild a curve with specified degree and point count. Returns True on success."""
+            return self._rs_dispatch("RebuildCurve", [curve_id, degree, point_count])
+        self.app.tool()(rs_RebuildCurve)
+
+        def rs_ReverseCurve(ctx: Context, curve_id: str) -> str:
+            """Reverse the direction of a curve. Returns True on success."""
+            return self._rs_dispatch("ReverseCurve", [curve_id])
+        self.app.tool()(rs_ReverseCurve)
+
+        def rs_CloseCurve(ctx: Context, curve_id: str, tolerance: float = -1.0) -> str:
+            """Close an open curve. Returns the closed curve GUID."""
+            return self._rs_dispatch("CloseCurve", [curve_id, tolerance])
+        self.app.tool()(rs_CloseCurve)
+
+        # -- Surface creation --
+
+        def rs_AddSphere(ctx: Context, center_or_plane: List[float], radius: float) -> str:
+            """Add a sphere. Returns the surface GUID."""
+            return self._rs_dispatch("AddSphere", [center_or_plane, radius])
+        self.app.tool()(rs_AddSphere)
+
+        def rs_AddCylinder(ctx: Context, base: List[float], height: float, radius: float, cap: bool = True) -> str:
+            """Add a cylinder. base is center of bottom [x,y,z]. Returns surface GUID."""
+            return self._rs_dispatch("AddCylinder", [base, height, radius, cap])
+        self.app.tool()(rs_AddCylinder)
+
+        def rs_AddCone(ctx: Context, base: List[float], height: float, radius: float, cap: bool = True) -> str:
+            """Add a cone. base is center of bottom [x,y,z]. Returns surface GUID."""
+            return self._rs_dispatch("AddCone", [base, height, radius, cap])
+        self.app.tool()(rs_AddCone)
+
+        def rs_AddBox(ctx: Context, corners: List[List[float]]) -> str:
+            """Add a box from 8 corner points. Returns the surface GUID."""
+            return self._rs_dispatch("AddBox", [corners])
+        self.app.tool()(rs_AddBox)
+
+        def rs_AddTorus(ctx: Context, base: List[float], major_radius: float, minor_radius: float) -> str:
+            """Add a torus. base is center [x,y,z]. Returns surface GUID."""
+            return self._rs_dispatch("AddTorus", [base, major_radius, minor_radius])
+        self.app.tool()(rs_AddTorus)
+
+        def rs_AddPipe(ctx: Context, curve_id: str, parameters: List[float], radii: List[float], blend_type: int = 0, cap: int = 1, fit: bool = False) -> str:
+            """Add pipe surfaces around a curve. Returns list of surface GUIDs."""
+            return self._rs_dispatch("AddPipe", [curve_id, parameters, radii, blend_type, cap, fit])
+        self.app.tool()(rs_AddPipe)
+
+        def rs_AddPlanarSrf(ctx: Context, curve_ids: List[str]) -> str:
+            """Create a planar surface from closed planar curves. Returns list of surface GUIDs."""
+            return self._rs_dispatch("AddPlanarSrf", [curve_ids])
+        self.app.tool()(rs_AddPlanarSrf)
+
+        def rs_AddLoftSrf(ctx: Context, curve_ids: List[str], start: Optional[List[float]] = None, end: Optional[List[float]] = None, loft_type: int = 0, closed: bool = False) -> str:
+            """Create a lofted surface through curves. loft_type: 0=Normal,1=Loose,2=Tight,3=Straight. Returns list of surface GUIDs."""
+            args = [curve_ids]
+            if start:
+                args.append(start)
+            else:
+                args.append(None)
+            if end:
+                args.append(end)
+            else:
+                args.append(None)
+            args.append(loft_type)
+            args.append(closed)
+            return self._rs_dispatch("AddLoftSrf", args)
+        self.app.tool()(rs_AddLoftSrf)
+
+        def rs_AddSweep1(ctx: Context, rail: str, shapes: List[str], closed: bool = False) -> str:
+            """Create a sweep1 surface. Returns list of surface GUIDs."""
+            return self._rs_dispatch("AddSweep1", [rail, shapes, closed])
+        self.app.tool()(rs_AddSweep1)
+
+        def rs_AddSweep2(ctx: Context, rails: List[str], shapes: List[str], closed: bool = False) -> str:
+            """Create a sweep2 surface along two rails. Returns list of surface GUIDs."""
+            return self._rs_dispatch("AddSweep2", [rails, shapes, closed])
+        self.app.tool()(rs_AddSweep2)
+
+        def rs_AddRevSrf(ctx: Context, curve_id: str, axis: List[List[float]], start_angle: float = 0.0, end_angle: float = 360.0) -> str:
+            """Create a surface of revolution. axis is [[x,y,z],[x,y,z]]. Returns surface GUID."""
+            return self._rs_dispatch("AddRevSrf", [curve_id, axis, start_angle, end_angle])
+        self.app.tool()(rs_AddRevSrf)
+
+        def rs_AddEdgeSrf(ctx: Context, curve_ids: List[str]) -> str:
+            """Create a surface from 2, 3, or 4 edge curves. Returns surface GUID."""
+            return self._rs_dispatch("AddEdgeSrf", [curve_ids])
+        self.app.tool()(rs_AddEdgeSrf)
+
+        def rs_AddNetworkSrf(ctx: Context, curve_ids: List[str]) -> str:
+            """Create a surface from a network of crossing curves. Returns surface GUID."""
+            return self._rs_dispatch("AddNetworkSrf", [curve_ids])
+        self.app.tool()(rs_AddNetworkSrf)
+
+        def rs_AddPatch(ctx: Context, object_ids: List[str], uv_spans_or_count: Optional[List[int]] = None) -> str:
+            """Create a patch surface from curves/points. Returns surface GUID."""
+            args = [object_ids]
+            if uv_spans_or_count:
+                args.extend(uv_spans_or_count)
+            return self._rs_dispatch("AddPatch", args)
+        self.app.tool()(rs_AddPatch)
+
+        # -- Surface operations --
+
+        def rs_ExtrudeCurveStraight(ctx: Context, curve_id: str, start_point: List[float], end_point: List[float]) -> str:
+            """Extrude a curve straight between two points. Returns surface GUID."""
+            return self._rs_dispatch("ExtrudeCurveStraight", [curve_id, start_point, end_point])
+        self.app.tool()(rs_ExtrudeCurveStraight)
+
+        def rs_CapPlanarHoles(ctx: Context, surface_id: str) -> str:
+            """Cap all planar holes in a surface/polysurface. Returns True on success."""
+            return self._rs_dispatch("CapPlanarHoles", [surface_id])
+        self.app.tool()(rs_CapPlanarHoles)
+
+        def rs_FilletSurfaces(ctx: Context, surface0: str, surface1: str, radius: float) -> str:
+            """Create a fillet surface between two surfaces. Returns list of surface GUIDs."""
+            return self._rs_dispatch("FilletSurfaces", [surface0, surface1, radius])
+        self.app.tool()(rs_FilletSurfaces)
+
+        def rs_OffsetSurface(ctx: Context, surface_id: str, distance: float) -> str:
+            """Offset a surface by a distance. Returns surface GUID."""
+            return self._rs_dispatch("OffsetSurface", [surface_id, distance])
+        self.app.tool()(rs_OffsetSurface)
+
+        def rs_JoinSurfaces(ctx: Context, surface_ids: List[str], delete_input: bool = False) -> str:
+            """Join surfaces into polysurfaces. Returns the joined polysurface GUID."""
+            return self._rs_dispatch("JoinSurfaces", [surface_ids, delete_input])
+        self.app.tool()(rs_JoinSurfaces)
+
+        def rs_ExplodePolysurfaces(ctx: Context, surface_ids: List[str], delete_input: bool = False) -> str:
+            """Explode polysurfaces into individual surfaces. Returns list of surface GUIDs."""
+            return self._rs_dispatch("ExplodePolysurfaces", [surface_ids, delete_input])
+        self.app.tool()(rs_ExplodePolysurfaces)
+
+        def rs_DuplicateEdgeCurves(ctx: Context, surface_id: str, select: bool = False) -> str:
+            """Duplicate the edge curves of a surface. Returns list of curve GUIDs."""
+            return self._rs_dispatch("DuplicateEdgeCurves", [surface_id, select])
+        self.app.tool()(rs_DuplicateEdgeCurves)
+
+        def rs_DuplicateSurfaceBorder(ctx: Context, surface_id: str) -> str:
+            """Duplicate the border of a surface. Returns list of curve GUIDs."""
+            return self._rs_dispatch("DuplicateSurfaceBorder", [surface_id])
+        self.app.tool()(rs_DuplicateSurfaceBorder)
+
+        def rs_ExtractIsoCurve(ctx: Context, surface_id: str, parameter: List[float], direction: int) -> str:
+            """Extract an isocurve from a surface. direction: 0=U, 1=V. Returns list of curve GUIDs."""
+            return self._rs_dispatch("ExtractIsoCurve", [surface_id, parameter, direction])
+        self.app.tool()(rs_ExtractIsoCurve)
+
+        # -- Surface query --
+
+        def rs_SurfaceArea(ctx: Context, surface_id: str) -> str:
+            """Return the area of a surface or polysurface."""
+            return self._rs_dispatch("SurfaceArea", [surface_id])
+        self.app.tool()(rs_SurfaceArea)
+
+        def rs_SurfaceVolume(ctx: Context, surface_id: str) -> str:
+            """Return the volume of a closed surface or polysurface."""
+            return self._rs_dispatch("SurfaceVolume", [surface_id])
+        self.app.tool()(rs_SurfaceVolume)
+
+        def rs_SurfaceNormal(ctx: Context, surface_id: str, uv_parameter: List[float]) -> str:
+            """Return the normal direction at a uv parameter on a surface."""
+            return self._rs_dispatch("SurfaceNormal", [surface_id, uv_parameter])
+        self.app.tool()(rs_SurfaceNormal)
+
+        def rs_SurfaceDomain(ctx: Context, surface_id: str, direction: int) -> str:
+            """Return the domain of a surface in a direction (0=U, 1=V)."""
+            return self._rs_dispatch("SurfaceDomain", [surface_id, direction])
+        self.app.tool()(rs_SurfaceDomain)
+
+        def rs_EvaluateSurface(ctx: Context, surface_id: str, u: float, v: float) -> str:
+            """Evaluate a surface at a UV parameter. Returns [x,y,z]."""
+            return self._rs_dispatch("EvaluateSurface", [surface_id, u, v])
+        self.app.tool()(rs_EvaluateSurface)
+
+        def rs_BrepClosestPoint(ctx: Context, surface_id: str, point: List[float]) -> str:
+            """Find the closest point on a brep to a test point."""
+            return self._rs_dispatch("BrepClosestPoint", [surface_id, point])
+        self.app.tool()(rs_BrepClosestPoint)
+
+        def rs_IsSurface(ctx: Context, object_id: str) -> str:
+            """Test if an object is a surface."""
+            return self._rs_dispatch("IsSurface", [object_id])
+        self.app.tool()(rs_IsSurface)
+
+        def rs_IsPolysurface(ctx: Context, object_id: str) -> str:
+            """Test if an object is a polysurface."""
+            return self._rs_dispatch("IsPolysurface", [object_id])
+        self.app.tool()(rs_IsPolysurface)
+
+        def rs_IsPolysurfaceClosed(ctx: Context, object_id: str) -> str:
+            """Test if a polysurface is closed (solid)."""
+            return self._rs_dispatch("IsPolysurfaceClosed", [object_id])
+        self.app.tool()(rs_IsPolysurfaceClosed)
+
+        # -- Object operations --
+
+        def rs_CopyObject(ctx: Context, object_id: str, translation: Optional[List[float]] = None) -> str:
+            """Copy an object with optional translation [x,y,z]. Returns new object GUID."""
+            args = [object_id]
+            if translation:
+                args.append(translation)
+            return self._rs_dispatch("CopyObject", args)
+        self.app.tool()(rs_CopyObject)
+
+        def rs_MoveObject(ctx: Context, object_id: str, translation: List[float]) -> str:
+            """Move an object by a translation vector [x,y,z]. Returns the object GUID."""
+            return self._rs_dispatch("MoveObject", [object_id, translation])
+        self.app.tool()(rs_MoveObject)
+
+        def rs_RotateObject(ctx: Context, object_id: str, center_point: List[float], rotation_angle: float, axis: Optional[List[float]] = None) -> str:
+            """Rotate an object around a center point by degrees. Optional axis for 3D rotation. Returns GUID."""
+            args = [object_id, center_point, rotation_angle]
+            if axis:
+                args.append(axis)
+            return self._rs_dispatch("RotateObject", args)
+        self.app.tool()(rs_RotateObject)
+
+        def rs_ScaleObject(ctx: Context, object_id: str, origin: List[float], scale: List[float]) -> str:
+            """Scale an object from an origin point. scale is [sx,sy,sz]. Returns GUID."""
+            return self._rs_dispatch("ScaleObject", [object_id, origin, scale])
+        self.app.tool()(rs_ScaleObject)
+
+        def rs_MirrorObject(ctx: Context, object_id: str, start_point: List[float], end_point: List[float], copy: bool = False) -> str:
+            """Mirror an object across a line defined by two points. Returns GUID."""
+            return self._rs_dispatch("MirrorObject", [object_id, start_point, end_point, copy])
+        self.app.tool()(rs_MirrorObject)
+
+        def rs_ObjectLayer(ctx: Context, object_id: str, layer: Optional[str] = None) -> str:
+            """Get or set the layer of an object. If layer is None, returns current layer name."""
+            args = [object_id]
+            if layer is not None:
+                args.append(layer)
+            return self._rs_dispatch("ObjectLayer", args)
+        self.app.tool()(rs_ObjectLayer)
+
+        def rs_ObjectName(ctx: Context, object_id: str, name: Optional[str] = None) -> str:
+            """Get or set the name of an object."""
+            args = [object_id]
+            if name is not None:
+                args.append(name)
+            return self._rs_dispatch("ObjectName", args)
+        self.app.tool()(rs_ObjectName)
+
+        def rs_ObjectColor(ctx: Context, object_id: str, color: Optional[List[int]] = None) -> str:
+            """Get or set the display color of an object. color is [r,g,b]."""
+            args = [object_id]
+            if color is not None:
+                args.append(color)
+            return self._rs_dispatch("ObjectColor", args)
+        self.app.tool()(rs_ObjectColor)
+
+        def rs_ObjectType(ctx: Context, object_id: str) -> str:
+            """Return the object type as an integer."""
+            return self._rs_dispatch("ObjectType", [object_id])
+        self.app.tool()(rs_ObjectType)
+
+        # -- Geometry --
+
+        def rs_AddPoint(ctx: Context, point: List[float]) -> str:
+            """Add a point object at [x,y,z]. Returns the point GUID."""
+            return self._rs_dispatch("AddPoint", [point])
+        self.app.tool()(rs_AddPoint)
+
+        def rs_AddPoints(ctx: Context, points: List[List[float]]) -> str:
+            """Add multiple point objects. Returns list of point GUIDs."""
+            return self._rs_dispatch("AddPoints", [points])
+        self.app.tool()(rs_AddPoints)
+
+        def rs_AddTextDot(ctx: Context, text: str, point: List[float]) -> str:
+            """Add a text dot at a 3D point. Returns GUID."""
+            return self._rs_dispatch("AddTextDot", [text, point])
+        self.app.tool()(rs_AddTextDot)
+
+        def rs_AddText(ctx: Context, text: str, point_or_plane: List[float], height: float = 1.0, font: Optional[str] = None, font_style: int = 0) -> str:
+            """Add text to the document. Returns GUID."""
+            args = [text, point_or_plane, height]
+            if font:
+                args.append(font)
+                args.append(font_style)
+            return self._rs_dispatch("AddText", args)
+        self.app.tool()(rs_AddText)
+
+        def rs_BoundingBox(ctx: Context, object_ids: List[str]) -> str:
+            """Return the bounding box of one or more objects as 8 corner points."""
+            return self._rs_dispatch("BoundingBox", [object_ids])
+        self.app.tool()(rs_BoundingBox)
+
+        def rs_Area(ctx: Context, object_id: str) -> str:
+            """Return the area of a closed curve, surface, or mesh."""
+            return self._rs_dispatch("Area", [object_id])
+        self.app.tool()(rs_Area)
+
+        def rs_PointCoordinates(ctx: Context, point_id: str) -> str:
+            """Return the 3D coordinates of a point object."""
+            return self._rs_dispatch("PointCoordinates", [point_id])
+        self.app.tool()(rs_PointCoordinates)
+
+        # -- Selection --
+
+        def rs_AllObjects(ctx: Context, select: bool = False, include_lights: bool = False) -> str:
+            """Return all object GUIDs in the document."""
+            return self._rs_dispatch("AllObjects", [select, include_lights])
+        self.app.tool()(rs_AllObjects)
+
+        def rs_ObjectsByLayer(ctx: Context, layer_name: str, select: bool = False) -> str:
+            """Return all objects on a specific layer."""
+            return self._rs_dispatch("ObjectsByLayer", [layer_name, select])
+        self.app.tool()(rs_ObjectsByLayer)
+
+        def rs_ObjectsByType(ctx: Context, geometry_type: int, select: bool = False) -> str:
+            """Return all objects of a given type. Types: 1=Point, 4=Curve, 8=Surface, 16=Polysurface, 32=Mesh."""
+            return self._rs_dispatch("ObjectsByType", [geometry_type, select])
+        self.app.tool()(rs_ObjectsByType)
+
+        def rs_ObjectsByName(ctx: Context, name: str, select: bool = False) -> str:
+            """Return all objects with a given name."""
+            return self._rs_dispatch("ObjectsByName", [name, select])
+        self.app.tool()(rs_ObjectsByName)
+
+        def rs_SelectedObjects(ctx: Context) -> str:
+            """Return GUIDs of all currently selected objects."""
+            return self._rs_dispatch("SelectedObjects")
+        self.app.tool()(rs_SelectedObjects)
+
+        def rs_UnselectAllObjects(ctx: Context) -> str:
+            """Unselect all objects in the document."""
+            return self._rs_dispatch("UnselectAllObjects")
+        self.app.tool()(rs_UnselectAllObjects)
+
+        def rs_LastCreatedObjects(ctx: Context, select: bool = False) -> str:
+            """Return the GUIDs of the last objects created."""
+            return self._rs_dispatch("LastCreatedObjects", [select])
+        self.app.tool()(rs_LastCreatedObjects)
+
+        # -- Layer --
+
+        def rs_AddLayer(ctx: Context, name: str, color: Optional[List[int]] = None, visible: bool = True, locked: bool = False, parent: Optional[str] = None) -> str:
+            """Add a new layer. Returns the layer index."""
+            args = [name]
+            if color:
+                args.append(color)
+            else:
+                args.append(None)
+            args.append(visible)
+            args.append(locked)
+            if parent:
+                args.append(parent)
+            return self._rs_dispatch("AddLayer", args)
+        self.app.tool()(rs_AddLayer)
+
+        def rs_CurrentLayer(ctx: Context, layer: Optional[str] = None) -> str:
+            """Get or set the current layer name."""
+            args = []
+            if layer is not None:
+                args.append(layer)
+            return self._rs_dispatch("CurrentLayer", args)
+        self.app.tool()(rs_CurrentLayer)
+
+        def rs_LayerVisible(ctx: Context, layer_name: str, visible: Optional[bool] = None) -> str:
+            """Get or set layer visibility."""
+            args = [layer_name]
+            if visible is not None:
+                args.append(visible)
+            return self._rs_dispatch("LayerVisible", args)
+        self.app.tool()(rs_LayerVisible)
+
+        def rs_LayerColor(ctx: Context, layer_name: str, color: Optional[List[int]] = None) -> str:
+            """Get or set the color of a layer."""
+            args = [layer_name]
+            if color is not None:
+                args.append(color)
+            return self._rs_dispatch("LayerColor", args)
+        self.app.tool()(rs_LayerColor)
+
+        def rs_LayerNames(ctx: Context) -> str:
+            """Return all layer names in the document."""
+            return self._rs_dispatch("LayerNames")
+        self.app.tool()(rs_LayerNames)
+
+        def rs_RenameLayer(ctx: Context, old_name: str, new_name: str) -> str:
+            """Rename a layer. Returns the new name on success."""
+            return self._rs_dispatch("RenameLayer", [old_name, new_name])
+        self.app.tool()(rs_RenameLayer)
+
+        # -- View --
+
+        def rs_ZoomExtents(ctx: Context, view: Optional[str] = None, all_views: bool = False) -> str:
+            """Zoom to fit all objects in the viewport."""
+            args = [view, all_views]
+            return self._rs_dispatch("ZoomExtents", args)
+        self.app.tool()(rs_ZoomExtents)
+
+        def rs_ZoomSelected(ctx: Context, view: Optional[str] = None, all_views: bool = False) -> str:
+            """Zoom to fit selected objects."""
+            args = [view, all_views]
+            return self._rs_dispatch("ZoomSelected", args)
+        self.app.tool()(rs_ZoomSelected)
+
+        def rs_ViewCamera(ctx: Context, view: Optional[str] = None, camera: Optional[List[float]] = None) -> str:
+            """Get or set the camera position of a view."""
+            args = [view]
+            if camera is not None:
+                args.append(camera)
+            return self._rs_dispatch("ViewCamera", args)
+        self.app.tool()(rs_ViewCamera)
+
+        def rs_CurrentView(ctx: Context, view: Optional[str] = None) -> str:
+            """Get or set the current active view by name."""
+            args = []
+            if view is not None:
+                args.append(view)
+            return self._rs_dispatch("CurrentView", args)
+        self.app.tool()(rs_CurrentView)
+
+        def rs_Redraw(ctx: Context) -> str:
+            """Force a redraw of all views."""
+            return self._rs_dispatch("Redraw")
+        self.app.tool()(rs_Redraw)
+
+        def rs_EnableRedraw(ctx: Context, enable: bool = True) -> str:
+            """Enable or disable viewport redraw for performance."""
+            return self._rs_dispatch("EnableRedraw", [enable])
+        self.app.tool()(rs_EnableRedraw)
+
+        # -- Document --
+
+        def rs_UnitSystem(ctx: Context, unit_system: Optional[int] = None) -> str:
+            """Get or set the document unit system. Common: 2=mm, 3=cm, 4=m, 8=inches, 9=feet."""
+            args = []
+            if unit_system is not None:
+                args.append(unit_system)
+            return self._rs_dispatch("UnitSystem", args)
+        self.app.tool()(rs_UnitSystem)
+
+        def rs_DocumentName(ctx: Context) -> str:
+            """Return the name of the current document."""
+            return self._rs_dispatch("DocumentName")
+        self.app.tool()(rs_DocumentName)
+
+        # -- Mesh --
+
+        def rs_AddMesh(ctx: Context, vertices: List[List[float]], face_vertices: List[List[int]]) -> str:
+            """Add a mesh from vertices and face vertex indices. Returns mesh GUID."""
+            return self._rs_dispatch("AddMesh", [vertices, face_vertices])
+        self.app.tool()(rs_AddMesh)
+
+        def rs_MeshBooleanUnion(ctx: Context, mesh_ids: List[str]) -> str:
+            """Boolean union of meshes. Returns list of mesh GUIDs."""
+            return self._rs_dispatch("MeshBooleanUnion", [mesh_ids])
+        self.app.tool()(rs_MeshBooleanUnion)
+
+        def rs_MeshBooleanDifference(ctx: Context, input0: List[str], input1: List[str]) -> str:
+            """Boolean difference of meshes. Returns list of mesh GUIDs."""
+            return self._rs_dispatch("MeshBooleanDifference", [input0, input1])
+        self.app.tool()(rs_MeshBooleanDifference)
+
+        def rs_JoinMeshes(ctx: Context, mesh_ids: List[str], delete_input: bool = False) -> str:
+            """Join meshes into a single mesh. Returns the joined mesh GUID."""
+            return self._rs_dispatch("JoinMeshes", [mesh_ids, delete_input])
+        self.app.tool()(rs_JoinMeshes)
+
+        def rs_MeshToNurb(ctx: Context, mesh_id: str) -> str:
+            """Convert a mesh to a NURBS polysurface. Returns polysurface GUID."""
+            return self._rs_dispatch("MeshToNurb", [mesh_id])
+        self.app.tool()(rs_MeshToNurb)
+
+        def rs_IsMesh(ctx: Context, object_id: str) -> str:
+            """Test if an object is a mesh."""
+            return self._rs_dispatch("IsMesh", [object_id])
+        self.app.tool()(rs_IsMesh)
+
+        # -- Utility --
+
+        def rs_Distance(ctx: Context, point1: List[float], point2: List[float]) -> str:
+            """Return the distance between two 3D points."""
+            return self._rs_dispatch("Distance", [point1, point2])
+        self.app.tool()(rs_Distance)
+
+        def rs_Angle(ctx: Context, point1: List[float], point2: List[float]) -> str:
+            """Return the angle between two points (in degrees)."""
+            return self._rs_dispatch("Angle", [point1, point2])
+        self.app.tool()(rs_Angle)
+
+        def rs_CullDuplicatePoints(ctx: Context, points: List[List[float]], tolerance: float = 0.01) -> str:
+            """Remove duplicate points from a list. Returns culled point list."""
+            return self._rs_dispatch("CullDuplicatePoints", [points, tolerance])
+        self.app.tool()(rs_CullDuplicatePoints)
+
+        # -- Transformation --
+
+        def rs_XformScale(ctx: Context, scale: List[float], point: Optional[List[float]] = None) -> str:
+            """Create a scale transformation matrix. Use with rs_TransformObject."""
+            args = [scale]
+            if point:
+                args.append(point)
+            return self._rs_dispatch("XformScale", args)
+        self.app.tool()(rs_XformScale)
+
+        def rs_XformTranslation(ctx: Context, vector: List[float]) -> str:
+            """Create a translation transformation matrix."""
+            return self._rs_dispatch("XformTranslation", [vector])
+        self.app.tool()(rs_XformTranslation)
+
+        def rs_TransformObject(ctx: Context, object_id: str, matrix: List[List[float]], copy: bool = False) -> str:
+            """Transform an object with a 4x4 transformation matrix. Returns GUID."""
+            return self._rs_dispatch("TransformObject", [object_id, matrix, copy])
+        self.app.tool()(rs_TransformObject)
+
+        # -- Group --
+
+        def rs_AddGroup(ctx: Context, group_name: Optional[str] = None) -> str:
+            """Add a new empty group. Returns the group name."""
+            args = []
+            if group_name:
+                args.append(group_name)
+            return self._rs_dispatch("AddGroup", args)
+        self.app.tool()(rs_AddGroup)
+
+        def rs_AddObjectsToGroup(ctx: Context, object_ids: List[str], group_name: str) -> str:
+            """Add objects to a group. Returns count of objects added."""
+            return self._rs_dispatch("AddObjectsToGroup", [object_ids, group_name])
+        self.app.tool()(rs_AddObjectsToGroup)
+
+        def rs_GroupNames(ctx: Context) -> str:
+            """Return all group names in the document."""
+            return self._rs_dispatch("GroupNames")
+        self.app.tool()(rs_GroupNames)
+
+        # -- Material --
+
+        def rs_AddMaterialToObject(ctx: Context, object_id: str) -> str:
+            """Add a material to an object. Returns the material index."""
+            return self._rs_dispatch("AddMaterialToObject", [object_id])
+        self.app.tool()(rs_AddMaterialToObject)
+
+        def rs_MaterialColor(ctx: Context, material_index: int, color: Optional[List[int]] = None) -> str:
+            """Get or set the diffuse color of a material. color is [r,g,b]."""
+            args = [material_index]
+            if color is not None:
+                args.append(color)
+            return self._rs_dispatch("MaterialColor", args)
+        self.app.tool()(rs_MaterialColor)
+
+        # -- Block --
+
+        def rs_InsertBlock(ctx: Context, block_name: str, insertion_point: List[float], scale: Optional[List[float]] = None, angle: float = 0.0) -> str:
+            """Insert a block instance. Returns the instance GUID."""
+            args = [block_name, insertion_point]
+            if scale:
+                args.append(scale)
+            else:
+                args.append([1, 1, 1])
+            args.append(angle)
+            return self._rs_dispatch("InsertBlock", args)
+        self.app.tool()(rs_InsertBlock)
+
+        def rs_ExplodeBlockInstance(ctx: Context, block_id: str, delete_input: bool = True) -> str:
+            """Explode a block instance into individual objects. Returns list of object GUIDs."""
+            return self._rs_dispatch("ExplodeBlockInstance", [block_id, delete_input])
+        self.app.tool()(rs_ExplodeBlockInstance)
+
+        def rs_BlockNames(ctx: Context) -> str:
+            """Return all block definition names."""
+            return self._rs_dispatch("BlockNames")
+        self.app.tool()(rs_BlockNames)
+
+        # -- Plane --
+
+        def rs_PlaneFromNormal(ctx: Context, origin: List[float], normal: List[float]) -> str:
+            """Create a plane from an origin and normal vector."""
+            return self._rs_dispatch("PlaneFromNormal", [origin, normal])
+        self.app.tool()(rs_PlaneFromNormal)
+
+        def rs_PlaneFromPoints(ctx: Context, origin: List[float], x_point: List[float], y_point: List[float]) -> str:
+            """Create a plane from three points."""
+            return self._rs_dispatch("PlaneFromPoints", [origin, x_point, y_point])
+        self.app.tool()(rs_PlaneFromPoints)
+
+        def rs_WorldXYPlane(ctx: Context) -> str:
+            """Return the world XY plane."""
+            return self._rs_dispatch("WorldXYPlane")
+        self.app.tool()(rs_WorldXYPlane)
+
+        # -- Userdata --
+
+        def rs_SetUserText(ctx: Context, object_id: str, key: str, value: Optional[str] = None) -> str:
+            """Set a user text key-value pair on an object. Pass value=None to delete."""
+            args = [object_id, key]
+            if value is not None:
+                args.append(value)
+            return self._rs_dispatch("SetUserText", args)
+        self.app.tool()(rs_SetUserText)
+
+        def rs_GetUserText(ctx: Context, object_id: str, key: Optional[str] = None) -> str:
+            """Get user text from an object. If key is None, returns all keys."""
+            args = [object_id]
+            if key is not None:
+                args.append(key)
+            return self._rs_dispatch("GetUserText", args)
+        self.app.tool()(rs_GetUserText)
+
+        # -- Dimension --
+
+        def rs_AddLinearDimension(ctx: Context, start: List[float], end: List[float], text_point: List[float]) -> str:
+            """Add a linear dimension. Returns the dimension GUID."""
+            return self._rs_dispatch("AddLinearDimension", [start, end, text_point])
+        self.app.tool()(rs_AddLinearDimension)
+
+        def rs_AddLeader(ctx: Context, points: List[List[float]], text: Optional[str] = None) -> str:
+            """Add a leader annotation. Returns the leader GUID."""
+            args = [points]
+            if text:
+                args.append(text)
+            return self._rs_dispatch("AddLeader", args)
+        self.app.tool()(rs_AddLeader)
+
+    # ------------------------------------------------------------------
+    # Category-level catch-all tools (one tool per RS category)
+    # ------------------------------------------------------------------
+
+    # Map of category -> short description for the tool docstring
+    _CATEGORY_DESCRIPTIONS = {
+        "application": "Rhino application settings, aliases, search paths, and status bar functions",
+        "block": "Block definitions and instances — create, insert, explode, query blocks",
+        "curve": "Curve creation, query, and manipulation — arcs, circles, NURBS, offsets, booleans, etc.",
+        "dimension": "Dimensions, leaders, and dimension styles",
+        "document": "Document properties — units, tolerances, render settings, file info",
+        "geometry": "Points, text dots, text objects, point clouds, clipping planes, and area/bounding box queries",
+        "grips": "Control point grip editing — enable, select, move grips",
+        "group": "Object groups — create, add to, remove, query",
+        "hatch": "Hatch patterns and hatch objects",
+        "layer": "Layer management — create, delete, visibility, color, locking",
+        "light": "Lights — directional, point, spot, rectangular, linear",
+        "line": "Line intersection and distance calculations",
+        "linetype": "Linetype queries",
+        "material": "Materials — create, assign to objects/layers, modify properties",
+        "mesh": "Mesh creation, booleans, queries, and conversion",
+        "object": "Object manipulation — copy, move, rotate, scale, mirror, properties",
+        "plane": "Plane construction, intersection, and evaluation",
+        "pointvector": "Point and vector math — add, subtract, cross product, transform",
+        "selection": "Object selection and filtering by layer, type, name, color",
+        "surface": "Surface/polysurface creation, booleans, filleting, offsetting, queries",
+        "toolbar": "Toolbar management",
+        "transformation": "Transformation matrices — scale, rotate, translate, mirror, shear",
+        "userdata": "User text and document data — get/set key-value metadata",
+        "userinterface": "UI dialogs — get user input, message boxes, file dialogs",
+        "utility": "Utility functions — distance, angle, color, sorting, point creation",
+        "view": "Viewport control — zoom, camera, display modes, named views, CPlanes",
+    }
+
+    def _register_category_tools(self):
+        """Register one catch-all tool per RhinoScriptSyntax category."""
+        categories = get_categories()
+        for cat in categories:
+            self._make_category_tool(cat)
+
+    def _make_category_tool(self, category: str):
+        """Create and register a single category-level dispatch tool."""
+        # Get all functions in this category
+        all_funcs = [f["function_name"] for f in get_all_functions(category=category)]
+        # Exclude individually-registered functions
+        remaining = [f for f in all_funcs if f not in self.INDIVIDUAL_RS_FUNCTIONS]
+
+        if not remaining:
+            return  # All functions in this category have individual tools
+
+        desc = self._CATEGORY_DESCRIPTIONS.get(category, "RhinoScriptSyntax {0} functions".format(category))
+        func_list = ", ".join(sorted(remaining))
+
+        # Build the tool function
+        tool_self = self  # capture for closure
+
+        async def category_handler(
+            ctx: Context,
+            function_name: str,
+            args: Optional[List] = None,
+            kwargs: Optional[Dict[str, Any]] = None,
+        ) -> str:
+            """placeholder"""
+            return tool_self._rs_dispatch(function_name, args, kwargs)
+
+        # Set dynamic name and docstring
+        tool_name = "rhinoscript_{0}".format(category)
+        category_handler.__name__ = tool_name
+        category_handler.__qualname__ = "RhinoTools.{0}".format(tool_name)
+        category_handler.__doc__ = (
+            "{0}.\n\n"
+            "Call any rs.* function in the '{1}' category by name.\n"
+            "Use look_up_RhinoScriptSyntax(function_name) for detailed parameter docs.\n\n"
+            "Available functions: {2}"
+        ).format(desc, category, func_list)
+
+        self.app.tool()(category_handler)
 
     def execute_command(self, command: Dict[str, Any]) -> Any:
         """Execute a raw command on Rhino (type + params). Used by HTTP/WebSocket."""

@@ -17,7 +17,7 @@ Claude ──MCP──▶ keratin (Python 3.10+)  ──TCP:9876──▶  rhino
 | Component | Runtime | Role |
 |-----------|---------|------|
 | `rhino_script.py` | IronPython 2.7 inside Rhino | Listens on `localhost:9876`, executes commands on Rhino's UI thread |
-| `keratin` (MCP server) | Python 3.10+ on the host | Exposes 40+ tools to Claude via the Model Context Protocol |
+| `keratin` (MCP server) | Python 3.10+ on the host | Exposes tools to Claude via the Model Context Protocol |
 
 ---
 
@@ -53,20 +53,30 @@ pip install keratin
 claude mcp add rhino -- keratin
 ```
 
-### 4. Load the listener in Rhino
+**LM Studio / other MCP clients** — add to your `mcp.json`:
 
-Run `RunPythonScript` and select the installed `rhino_script.py`.
-
-**Auto-start on launch (optional):**
-Tools > Options > General > Startup Commands > add:
-
+```json
+{
+  "mcpServers": {
+    "rhino": {
+      "command": "keratin",
+      "args": []
+    }
+  }
+}
 ```
-RunPythonScript "C:\path\to\rhino_script.py"
-```
+
+### 4. Start the listener in Rhino
+
+Type `StartKeratin` in the Rhino command line. To stop: `StopKeratin`.
 
 ---
 
 ## Tools
+
+keratin exposes **160+ tools** covering the full RhinoScriptSyntax API. Popular functions are registered as individual tools for easy discovery; the rest are accessible through category-level tools.
+
+### Dedicated tools
 
 | Category | Tools |
 |----------|-------|
@@ -79,6 +89,33 @@ RunPythonScript "C:\path\to\rhino_script.py"
 | **Grasshopper** | `grasshopper_add_components` `grasshopper_get_definition_info` `grasshopper_run_solver` `grasshopper_clear_canvas` `grasshopper_list_available_components` |
 | **Code** | `execute_rhino_code` `execute_rhinoscript_python_code` |
 | **Discovery** | `list_rhino_commands` `list_rhinoscript_functions` `look_up_RhinoScriptSyntax` |
+
+### Individual RhinoScript tools (90+)
+
+High-frequency `rs.*` functions exposed as standalone tools for zero-friction use:
+
+| Area | Examples |
+|------|----------|
+| **Curve creation** | `rs_AddLine` `rs_AddCircle` `rs_AddArc3Pt` `rs_AddEllipse` `rs_AddInterpCurve` `rs_AddNurbsCurve` `rs_AddRectangle` `rs_AddSpiral` `rs_AddPolyline` `rs_AddBlendCurve` `rs_AddFilletCurve` |
+| **Curve query** | `rs_CurveLength` `rs_CurveStartPoint` `rs_CurveEndPoint` `rs_CurveMidPoint` `rs_CurveClosestPoint` `rs_CurveDomain` `rs_CurveArea` `rs_CurveTangent` `rs_IsCurve` `rs_IsCurveClosed` |
+| **Curve ops** | `rs_DivideCurve` `rs_EvaluateCurve` `rs_OffsetCurve` `rs_JoinCurves` `rs_ExplodeCurves` `rs_SplitCurve` `rs_RebuildCurve` `rs_ReverseCurve` `rs_CloseCurve` |
+| **Surface creation** | `rs_AddSphere` `rs_AddCylinder` `rs_AddCone` `rs_AddBox` `rs_AddTorus` `rs_AddPipe` `rs_AddPlanarSrf` `rs_AddLoftSrf` `rs_AddSweep1` `rs_AddSweep2` `rs_AddRevSrf` `rs_AddEdgeSrf` `rs_AddNetworkSrf` `rs_AddPatch` |
+| **Surface ops** | `rs_ExtrudeCurveStraight` `rs_CapPlanarHoles` `rs_FilletSurfaces` `rs_OffsetSurface` `rs_JoinSurfaces` `rs_ExplodePolysurfaces` `rs_DuplicateEdgeCurves` `rs_DuplicateSurfaceBorder` `rs_ExtractIsoCurve` |
+| **Surface query** | `rs_SurfaceArea` `rs_SurfaceVolume` `rs_SurfaceNormal` `rs_SurfaceDomain` `rs_EvaluateSurface` `rs_BrepClosestPoint` `rs_IsSurface` `rs_IsPolysurface` `rs_IsPolysurfaceClosed` |
+| **Object ops** | `rs_CopyObject` `rs_MoveObject` `rs_RotateObject` `rs_ScaleObject` `rs_MirrorObject` `rs_ObjectLayer` `rs_ObjectName` `rs_ObjectColor` `rs_ObjectType` |
+| **Selection** | `rs_AllObjects` `rs_ObjectsByLayer` `rs_ObjectsByType` `rs_ObjectsByName` `rs_SelectedObjects` `rs_UnselectAllObjects` `rs_LastCreatedObjects` |
+| **Mesh** | `rs_AddMesh` `rs_MeshBooleanUnion` `rs_MeshBooleanDifference` `rs_JoinMeshes` `rs_MeshToNurb` `rs_IsMesh` |
+| **Transform** | `rs_XformScale` `rs_XformTranslation` `rs_TransformObject` |
+| **View** | `rs_ZoomExtents` `rs_ZoomSelected` `rs_ViewCamera` `rs_CurrentView` `rs_Redraw` `rs_EnableRedraw` |
+| **Misc** | `rs_AddPoint` `rs_AddTextDot` `rs_BoundingBox` `rs_Distance` `rs_Angle` `rs_AddLayer` `rs_SetUserText` `rs_GetUserText` `rs_AddGroup` `rs_PlaneFromNormal` `rs_WorldXYPlane` |
+
+### Category catch-all tools (26)
+
+Any `rs.*` function not listed above is still accessible through its category tool. Call these with a function name and arguments:
+
+`rhinoscript_application` · `rhinoscript_block` · `rhinoscript_curve` · `rhinoscript_dimension` · `rhinoscript_document` · `rhinoscript_geometry` · `rhinoscript_grips` · `rhinoscript_group` · `rhinoscript_hatch` · `rhinoscript_layer` · `rhinoscript_light` · `rhinoscript_line` · `rhinoscript_linetype` · `rhinoscript_material` · `rhinoscript_mesh` · `rhinoscript_object` · `rhinoscript_plane` · `rhinoscript_pointvector` · `rhinoscript_selection` · `rhinoscript_surface` · `rhinoscript_toolbar` · `rhinoscript_transformation` · `rhinoscript_userdata` · `rhinoscript_userinterface` · `rhinoscript_utility` · `rhinoscript_view`
+
+Together these cover all **994 functions** in the Rhino 7 RhinoScriptSyntax API.
 
 ---
 
@@ -145,7 +182,7 @@ python -m twine upload dist/*
 ```bash
 cd yak-package
 "C:\Program Files\Rhino 7\System\yak.exe" build
-"C:\Program Files\Rhino 7\System\yak.exe" push keratin-0.1.0-any-any.yak
+"C:\Program Files\Rhino 7\System\yak.exe" push keratin-0.1.4-any-any.yak
 ```
 
 Requires a McNeel account. Run `yak login` before your first push.

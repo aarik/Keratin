@@ -11,7 +11,17 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_script.py''\\).read\\(\\)\\); ast.parse\\(open\\(''yak-package/rhino_script.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/rhino_tools.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/web_server.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/server.py''\\).read\\(\\)\\); ast.parse\\(open\\(''rhino_mcp/server_sse.py''\\).read\\(\\)\\); print\\(''ALL FILES: SYNTAX OK''\\)\")",
       "Bash(git status:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(python3:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/rhino_tools.py''\\).read\\(\\)\\); print\\(''rhino_tools.py: OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''rhino_mcp/resources/rhino_command_roster.py''\\).read\\(\\)\\); print\\(''rhino_command_roster.py: OK''\\)\")",
+      "Bash(grep -v '.yak$')",
+      "Bash(\"C:\\\\Users\\\\Aarik\\\\Documents\\\\GitHub\\\\Keratin\\\\CHANGELOG.md\":*)",
+      "Bash(\"/c/Program Files/Rhino 7/System/yak.exe\" build)",
+      "Bash(\"/c/Program Files/Rhino 7/System/yak.exe\" push keratin-0.1.4-any-any.yak)",
+      "Bash(rm -rf dist/ build/ *.egg-info)",
+      "Bash(python -m build)",
+      "Bash(python -m twine upload dist/keratin-0.1.4* -u __token__ -p \"pypi-AgEIcHlwaS5vcmcCJGM2MDA0MTA3LTcyOGYtNDNhOS1hY2NlLWFhNTNhNDAwMDhhZgACD1sxLFsia2VyYXRpbiJdXQACLFsyLFsiNGFkOTkxZmEtNTZhNy00MGQ0LWJkYzktZjY5OWQwMWE2NzVkIl1dAAAGIKpDJNHCLWwWVfRL6o2ixF4W2zaWMSwdOFTGwke60Efw\")"
     ]
   }
 }

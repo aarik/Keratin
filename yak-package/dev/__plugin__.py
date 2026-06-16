@@ -1,0 +1,6 @@
+id = "keratin-mcp-bridge"
+version = "0.1.4"
+title = "Keratin"
+description = "MCP bridge connecting Claude AI to Rhinoceros 3D. Provides StartKeratin and StopKeratin commands."
+author = "Aarik W"
+url = "https://github.com/aarik/keratin"

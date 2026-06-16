@@ -24,10 +24,10 @@ pip install keratin
 }
 ```
 
-**Step 4 — Load the listener inside Rhino:**
-- Type `RunPythonScript` in the Rhino command line
-- Navigate to the installed `rhino_script.py` and run it
-- Optional: add to startup via Tools → Options → General → Startup Commands
+**Step 4 — Start the listener inside Rhino:**
+Type `StartKeratin` in the Rhino command line. That's it.
+
+To stop: type `StopKeratin`.
 
 ## Requirements
 

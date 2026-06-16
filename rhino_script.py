@@ -375,6 +375,8 @@ class RhinoMCPServer:
                 return self._grasshopper_clear_canvas()
             elif command_type == "grasshopper_list_available_components":
                 return self._grasshopper_list_available_components()
+            elif command_type == "rhinoscript_dispatch":
+                return self._rhinoscript_dispatch(params)
             else:
                 return {"status": "error", "message": "Unknown command type"}
                 
@@ -383,6 +385,87 @@ class RhinoMCPServer:
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
     
+    def _serialize_rs_result(self, value):
+        """Convert RhinoScriptSyntax return values to JSON-safe types."""
+        if value is None:
+            return None
+        if isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return value
+        # System.Guid -> string
+        if hasattr(value, 'ToString') and type(value).__name__ == 'Guid':
+            return str(value)
+        # Rhino.Geometry.Point3d, Vector3d -> list
+        if hasattr(value, 'X') and hasattr(value, 'Y'):
+            if hasattr(value, 'Z'):
+                return [value.X, value.Y, value.Z]
+            return [value.X, value.Y]
+        # Rhino.Geometry.Plane -> dict
+        if hasattr(value, 'Origin') and hasattr(value, 'Normal'):
+            try:
+                return {
+                    "origin": [value.Origin.X, value.Origin.Y, value.Origin.Z],
+                    "normal": [value.Normal.X, value.Normal.Y, value.Normal.Z],
+                    "xaxis": [value.XAxis.X, value.XAxis.Y, value.XAxis.Z],
+                    "yaxis": [value.YAxis.X, value.YAxis.Y, value.YAxis.Z],
+                }
+            except Exception:
+                return str(value)
+        # Rhino.Geometry.BoundingBox -> dict
+        if hasattr(value, 'Min') and hasattr(value, 'Max') and hasattr(value, 'IsValid'):
+            try:
+                return {
+                    "min": [value.Min.X, value.Min.Y, value.Min.Z],
+                    "max": [value.Max.X, value.Max.Y, value.Max.Z],
+                }
+            except Exception:
+                return str(value)
+        # Rhino.Geometry.Line -> dict
+        if hasattr(value, 'From') and hasattr(value, 'To') and hasattr(value, 'Length'):
+            try:
+                return {
+                    "from": [value.From.X, value.From.Y, value.From.Z],
+                    "to": [value.To.X, value.To.Y, value.To.Z],
+                }
+            except Exception:
+                return str(value)
+        # Lists/tuples -> recurse
+        if isinstance(value, (list, tuple)):
+            return [self._serialize_rs_result(v) for v in value]
+        # Dicts -> recurse values
+        if isinstance(value, dict):
+            result = {}
+            for k, v in value.items():
+                result[str(k)] = self._serialize_rs_result(v)
+            return result
+        # Fallback: stringify
+        return str(value)
+
+    def _rhinoscript_dispatch(self, params):
+        """Generic dispatch to any rhinoscriptsyntax (rs.*) function by name."""
+        try:
+            function_name = params.get("function_name", "")
+            args = params.get("args", [])
+            kwargs = params.get("kwargs", {})
+
+            if not function_name:
+                return {"status": "error", "message": "function_name is required"}
+
+            # Validate function exists on rs module
+            if not hasattr(rs, function_name):
+                return {"status": "error", "message": "Unknown rs function: {0}".format(function_name)}
+
+            func = getattr(rs, function_name)
+            result = func(*args, **kwargs)
+
+            return {"status": "success", "result": self._serialize_rs_result(result)}
+        except Exception as e:
+            log_message("rhinoscript_dispatch error ({0}): {1}".format(
+                params.get("function_name", "?"), str(e)))
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
+
     def _get_rhino_scene_info(self, params=None):
         """Get simplified scene information focusing on layers and example objects"""
         try:

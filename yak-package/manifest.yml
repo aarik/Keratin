@@ -1,17 +1,18 @@
 name: keratin
-version: 0.1.3
+version: 0.1.4
 authors:
   - Aarik W
 description: >
-  Rhino-side MCP bridge for Claude AI integration with an expanded toolset.
-  Installs the IronPython listener script into Rhino so Claude can create,
-  modify, and query geometry directly inside Rhinoceros 3D.
+  MCP bridge connecting Claude AI to Rhinoceros 3D.
+  Adds StartKeratin and StopKeratin commands to Rhino.
 
-  After installing this package, also install the companion MCP server:
+  After installing, also install the companion MCP server:
     pip install keratin
 
-  Then point your MCP client at the "keratin" command and load
-  rhino_script.py inside Rhino via RunPythonScript.
+  Then type StartKeratin in Rhino's command line to begin.
+
+  For MCP client configuration and full documentation, see:
+    https://github.com/aarik/keratin
 url: https://github.com/aarik/keratin
 icon: icon.png
 keywords:
